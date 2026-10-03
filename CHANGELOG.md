@@ -5,8 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased] — found and fixed during end-to-end validation ahead of the repository's first release
 
-> The 9 items below are the problems that surfaced when the skill was **actually run end to end** (the 3-page sample: narration → segment rendering → concat → burned-in subtitles → SRT), and they are already fixed in this repository.
-> They have not yet been ported back to the marketplace version (which is still 1.1.0); after porting, cut 1.1.1. **The first 6 of them all fail silently, so they must be ported back.**
+> The 11 items below are the problems that surfaced when the skill was **actually run end to end** (the 3-page sample: narration → segment rendering → concat → burned-in subtitles → SRT), and they are already fixed in this repository.
+> They have not yet been ported back to the marketplace version (which is still 1.1.0); after porting, cut 1.1.1. **8 of them fail silently, so they must be ported back.**
 
 ### Changed
 
@@ -25,6 +25,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **`--w`/`--h` had no effect when passed (portrait support was effectively useless)**: the header hard-coded `PlayResX/PlayResY` at 1920×1080, so `--w 1080 --h 1920` did not change the output. Fix: the header now reads `--w`/`--h` (measured portrait output gives `PlayResX: 1080` / `PlayResY: 1920`).
 - **`esc()` did not handle line breaks (pitfall 1 recurring)**: multi-line copy spliced raw newlines into the `Dialogue` line, leaving the second line without a `Dialogue:` prefix → libass parsing fails and **the whole subtitle disappears without any error**. This entry was already in the pitfall list, but neither script's `esc()` implemented it. Fix: escape line by line first, then join with a literal `\N`.
 - **`--bounds` robustness**: JSON with a BOM threw a bare stack trace (only `FileNotFoundError` was caught), and so did corrupted JSON. Fix: read with `utf-8-sig` and give a human-readable error when the file is corrupted.
+- **Rolling subtitles scrolled only the first sentence of each page** (pitfall 10, re-exposed by the key-lookup fix above). `gen_film_ass.py` built its rolling text from `ev[0][0]` — the first sentence-boundary entry — instead of the page's full script. Before the key fix the lookup always failed and the `vo3/NN.txt` fallback happened to supply the whole page, which is why the bug stayed hidden; once the lookup started succeeding, pages 1 and 2 scrolled 22 and 7 characters instead of 74 and 54. Fix: the page text file is now the source of truth, and the joined sentence boundaries are only the fallback — the same order `gen_sentence_ass.py` already used.
+- **A UTF-8 BOM in `vo3/NN.txt` leaked into the narration and the subtitles**: both scripts read those files with plain `utf-8`, and `str.strip()` does not remove U+FEFF, so an invisible character became the first character of every subtitle built from a page file. Notepad and several Windows editors write that BOM by default. Fix: read narration files with `utf-8-sig`.
 
 ### Documentation
 

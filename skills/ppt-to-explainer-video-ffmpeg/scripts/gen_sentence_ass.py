@@ -157,7 +157,9 @@ def main():
     n_syn = 0
     for f in pages:
         tag = f[:-4]
-        txt = open(os.path.join(ind, f), encoding="utf-8").read().strip()
+        # utf-8-sig: a BOM written by a Windows editor would otherwise become an
+        # invisible first character of the narration, in both the audio and the subtitle
+        txt = open(os.path.join(ind, f), encoding="utf-8-sig").read().strip()
         mp3p = os.path.join(outd, tag + ".mp3")
         if os.path.exists(mp3p) and not a.force:
             continue
@@ -182,7 +184,7 @@ def main():
         if a.mode == "scroll":
             # Scrolling subtitles must scroll the whole page's script together (that is how the old version produced films);
             # taking only ev[0][0] scrolls just the first sentence — measured the hard way.
-            body = open(os.path.join(ind, tag + ".txt"), encoding="utf-8").read().strip()
+            body = open(os.path.join(ind, tag + ".txt"), encoding="utf-8-sig").read().strip()
             if not body and ev:
                 body = "".join(x[0] for x in ev)
             mv = "{\\an7\\q2\\move(%d,%d,-%d,%d,0,9000)}" % (

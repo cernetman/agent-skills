@@ -143,8 +143,20 @@ def main():
         # Looking up str(i) only would silently miss them -> the first 9 pages lose their subtitles; in static mode the whole film gets 0 events.
         ev = bounds.get(str(i)) or bounds.get("%02d" % i) or bounds.get(i) or []
         if a.mode == "scroll":
-            txt = ev[0][0] if ev else open(os.path.join(job, a.txt_dir, "%02d.txt" % i),
-                                          encoding="utf-8").read().strip()
+            # A rolling subtitle must carry the WHOLE page's text. Taking
+            # ev[0][0] leaves only the first sentence rolling (pitfall 10), and
+            # because the bounds lookup above can now succeed, that bug is live
+            # again — the page text file is the source of truth, with the joined
+            # sentence boundaries only as a fallback.
+            txt = ""
+            page_txt = os.path.join(job, a.txt_dir, "%02d.txt" % i)
+            if os.path.exists(page_txt):
+                # utf-8-sig: editors on Windows (Notepad included) write a BOM by
+                # default, and a plain utf-8 read leaves it in the string, so an
+                # invisible U+FEFF ends up as the first character of the subtitle.
+                txt = open(page_txt, encoding="utf-8-sig").read().strip()
+            if not txt and ev:
+                txt = "".join(x[0] for x in ev)
             # Text width is measured for real with PIL; the end point is -W*1.06 so the whole sentence scrolls past the left edge
             try:
                 from PIL import ImageFont
