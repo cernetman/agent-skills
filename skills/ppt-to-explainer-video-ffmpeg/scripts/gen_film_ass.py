@@ -76,7 +76,8 @@ def main():
     ap.add_argument("--w", type=int, default=1920)   # 竖屏传 1080
     ap.add_argument("--h", type=int, default=1080)   # 竖屏传 1920
     ap.add_argument("--intro", type=float, default=0.0, help="整片起点偏移(预挂了片头就填 2.5)")
-    ap.add_argument("--t", type=float, default=0.5, help="转场时长补偿")
+    ap.add_argument("--t", type=float, default=0.5,
+                    help="转场时长补偿;硬切(concat)成片必须传 0,只有 xfade 模式才用 0.5(默认)")
     a = ap.parse_args()
 
     job = os.path.abspath(a.job)
@@ -97,9 +98,11 @@ def main():
 
     lines = [HEAD.format(size=a.size, y=a.y)]
     base = 0.0
+    film_end = 0.0
     for i in range(1, maxi + 1):
         page_start = base + a.intro
         page_dur = durs.get(i, 0.0)
+        film_end = max(film_end, page_start + page_dur)
         ev = bounds.get(str(i)) or bounds.get(i) or []
         if a.mode == "scroll":
             txt = ev[0][0] if ev else open(os.path.join(job, a.txt_dir, "%02d.txt" % i),
@@ -128,7 +131,12 @@ def main():
 
     out = os.path.join(job, a.out)
     open(out, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-    print("写出 %s, %d 条事件, 覆盖 %.1fs" % (out, len(lines) - 1, max(durs.values()) + a.intro))
+    warn = ""
+    if a.t:
+        warn = ("\n  [!] --t %.1f 是按 xfade 转场补偿算的;若成片走 --mode concat(硬切),\n"
+                "      字幕会每页提前 %.1fs 且逐页累积 —— 硬切成片请传 --t 0" % (a.t, a.t))
+    print("写出 %s, %d 条事件, 时间轴覆盖 0 ~ %.3fs%s"
+          % (out, len(lines) - 1, film_end, warn))
 
 
 if __name__ == "__main__":

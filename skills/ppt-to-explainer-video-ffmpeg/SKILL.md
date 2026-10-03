@@ -97,6 +97,28 @@ node "<skills>/ppt-explain/scripts/doc-to-pages.mjs" --input "<file.pptx>" --out
 "<你的python.exe>" "<技能>/scripts/render_all.py" --job . --seg seg --rows durations.json \
     --durations-out durations2.txt --no-sub --j 4 --crf 23 --preset veryfast --tail-freeze 3.0
 ```
+
+**先把 `durations.json` 备好** —— `render_all.py` 只读它，**不会自己算**。它是逐页时长表，`dur` 取 `mp3/NN.mp3` 的**真实时长**（用 `ffprobe` 量，别拿 bounds 累加：TTS 尾部静音也占画面时长）：
+
+```bash
+for f in mp3/*.mp3; do
+  echo "$(basename "$f" .mp3) $(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$f")"
+done
+```
+
+`--rows` 吃的是这个 JSON 格式：
+
+```json
+[{"page": 1, "dur": 11.736}, {"page": 2, "dur": 10.872}]
+```
+
+一行 Python 直接生成（Windows 上 `ffprobe` 换成绝对路径或不带 `.exe` 的裸名）：
+
+```bash
+python -c "import json,glob,os,subprocess as sp;rows=[{'page':int(os.path.basename(p)[:2]),'dur':round(float(sp.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',p],capture_output=True,text=True).stdout.strip()),3)} for p in sorted(glob.glob('mp3/*.mp3'))];json.dump(rows,open('durations.json','w'),ensure_ascii=False,indent=1);print(rows)"
+```
+
+漏了它，`render_all.py` 会直接报缺文件并重复上面这段格式说明（不是裸堆栈）。
 - `--no-sub`（默认）：段不带字幕，走三段式。
 - `--tail-freeze 3.0`：最后一页尾部定格。
 - 产出 `seg/NN.mp4` + `durations2.txt`（`NN=秒`）。
@@ -105,9 +127,20 @@ node "<skills>/ppt-explain/scripts/doc-to-pages.mjs" --input "<file.pptx>" --out
 ### 5. 生成整片字幕（脚本 `gen_film_ass.py`）
 ```bash
 "<你的python.exe>" "<技能>/scripts/gen_film_ass.py" --job . --durations durations2.txt \
-    --bounds bounds_cache.json --out all.ass --mode scroll --size 60 --y 900
+    --bounds bounds_cache.json --out all.ass --mode scroll --size 60 --y 900 --t 0
 ```
-时间轴（与 xfade 补偿等价）：**页面 i 起始 = Σ_{j<i} (dur_j − T)**。`--intro 2.5` 用于预挂了 3 秒片头的情况。
+时间轴：**页面 i 起始 = Σ_{j<i} (dur_j − T)**，`T` 由 `--t` 指定（默认 0.5）。
+
+⚠️ **`T` 必须和成片模式对齐，否则字幕逐页累积偏移**：
+
+| 成片模式 | 该传的 `--t` | 理由 |
+|---|---|---|
+| `--mode concat`（硬切，**三段式的默认**） | **`--t 0`** | 拼接不吃重叠，画面第 i 页就在 Σ dur_j 处 |
+| `--mode xfade`（交叉淡入） | `--t 0.5`（默认值） | 每级转场吃掉 0.5s 重叠 |
+
+硬切漏传 `--t 0` 的实测后果（3 页样本）：画面在第 11.736s / 22.608s 翻页，字幕却在 11.236s / 21.608s 就位——**每页早 0.5s，50 页到末页早 24.5s，而且不报任何错**。传 `--t 0` 后 ASS 起点与画面边界完全一致（0 / 11.736 / 22.608）。
+
+`--intro 2.5` 用于预挂了 3 秒片头的情况。
 
 ### 6. 合成成片（脚本 `gen_final.mjs`）
 ```bash
@@ -190,8 +223,10 @@ node "<技能>/scripts/gen_srt.mjs" --job . --bounds bounds_cache.json --intro 2
 12. **concat list 的相对路径以 list 文件所在目录为基准**。把 `file 'bench3/seg/01.mp4'` 写进 `bench3/list.txt` → 解析成 `bench3/bench3/…`，报 `Invalid argument`。**list 一律放工程根目录**，段路径写成 `bench3/seg/01.mp4`。
 13. **成品画质瓶颈在「第③步烧字幕」的 CRF，不在段 CRF**。同口径 5 页样本：段 crf18 vs crf23，最终成品体积只差 7.8%（4.71 vs 4.38 MB）——第③步本来就要重编，段里的压缩被抹平了。整片第③步 crf20→crf17 体积 +21%（47.9→58.1 MB），但同帧目视几乎无差。**图文片 778 kbps 够用，别盲目压 crf 追码率数字。**
 14. **Node 脚本里 `execSync` 调 ffprobe/ffmpeg 一律 EBUSY**（本机铁律）→ 量测时长体积、抽帧看图，全部走 Bash 工具；Node 只负责读文件、拼命令、写文件。
+15. **`--t` 必须和成片模式对齐，否则字幕逐页累积偏移**（本项目最隐蔽的一个）。`gen_film_ass.py` 的时间轴是 `页面 i 起始 = Σ_{j<i}(dur_j − T)`，`T` 默认 **0.5**（为 xfade 转场补偿）。但三段式成片走 `--mode concat` **硬切**，压根没有重叠 → 字幕第 i 页提前 (i−1)×0.5s。实测 3 页：画面在 11.736s / 22.608s 翻页，字幕却在 11.236s / 21.608s 就位；**50 页到末页早 24.5s**，全程零报错。修：硬切成片一律 `--t 0`（改后 ASS 起点 0 / 11.736 / 22.608，与画面边界完全一致）。
+16. **`durations.json` 不会自动生成**。`render_all.py` 的 `--rows` 是必需输入，但 7 步管线里没有任何脚本产出它 → 直接跑会报缺文件。用 `ffprobe` 量 `mp3/NN.mp3` 的真实时长自己凑（第 4 步有现成命令）。**别用 bounds 累加代替**：TTS 尾部静音也算在画面时长里。
 
 ## 写在最后
-这套东西的资产是上面 14 条踩坑 + 三段式架构，不是脚本本身。改脚本前先跑 `precheck.mjs`——大部分"跑不动"是环境问题，不是管线问题。
+这套东西的资产是上面 16 条踩坑 + 三段式架构，不是脚本本身。改脚本前先跑 `precheck.mjs`——大部分"跑不动"是环境问题，不是管线问题。
 
 环境安装（ffmpeg / edge-tts / 中文字体）见 `references/setup.md`；版本变更见仓库根目录 `CHANGELOG.md`。

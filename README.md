@@ -19,6 +19,11 @@ Turn a PPT/PDF into a page-by-page explainer video with AI narration and burned-
 
 ---
 
+![演示：PPT 逐页讲解视频，带从右向左的滚动字幕](assets/demo.gif)
+
+> ↑ 用本技能自己生成的 3 页样例（原速截取 8 秒）：页图 + AI 旁白 + 滚动跑马灯字幕。
+> 换成你自己 PPT 的成片片段会更有说服力——录制方式见下方「演示素材」。
+
 ## 这是什么
 
 一个自研 **Agent Skills** 合集。每个技能都是一个独立目录：一份写给 Agent 看的 `SKILL.md`（含触发词、管线步骤、参数速查、踩坑清单）+ 一组可复用的 `scripts/`。
@@ -89,11 +94,17 @@ Turn a PPT/PDF into a page-by-page explainer video with AI narration and burned-
 **1. 安装技能**（把技能目录放进你的 Agent 运行时的 skills 目录）
 
 ```bash
+# GitHub
 git clone https://github.com/__GH_USER__/agent-skills.git
+# Gitee 镜像（国内访问更快，内容一致）
+git clone https://gitee.com/__GITEE_USER__/agent-skills.git
 
 # Claude Code（用户级）
 mkdir -p ~/.claude/skills
 cp -r agent-skills/skills/ppt-to-explainer-video-ffmpeg ~/.claude/skills/
+
+# Cursor
+cp -r agent-skills/skills/ppt-to-explainer-video-ffmpeg ~/.cursor/skills/
 
 # 其他支持 Agent Skills 的运行时：把该技能目录整体复制到它的 skills 目录即可
 ```
@@ -117,22 +128,38 @@ node "<技能目录>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes 4
 python "<技能>/scripts/gen_sentence_ass.py" --job . --in vo3 --out mp3 \
     --assdir ass --bounds bounds_cache.json --mode scroll --size 60 --y 900
 
-# ③ 并行段渲染（不带字幕）
+# ③ 逐页时长表（render_all.py 的必需输入，不会自动生成）
+python -c "import json,glob,os,subprocess as sp;rows=[{'page':int(os.path.basename(p)[:2]),'dur':round(float(sp.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',p],capture_output=True,text=True).stdout.strip()),3)} for p in sorted(glob.glob('mp3/*.mp3'))];json.dump(rows,open('durations.json','w'),ensure_ascii=False,indent=1)"
+
+# ④ 并行段渲染（不带字幕）
 python "<技能>/scripts/render_all.py" --job . --seg seg --rows durations.json \
     --durations-out durations2.txt --no-sub --j 4 --crf 23 --preset veryfast --tail-freeze 3.0
 
-# ④ 整片绝对时间轴字幕
+# ⑤ 整片绝对时间轴字幕（硬切成片必须 --t 0，否则字幕逐页累积提前）
 python "<技能>/scripts/gen_film_ass.py" --job . --durations durations2.txt \
-    --bounds bounds_cache.json --out all.ass --mode scroll --size 60 --y 900
+    --bounds bounds_cache.json --out all.ass --mode scroll --size 60 --y 900 --t 0
 
-# ⑤ 合成成片
+# ⑥ 合成成片
 node "<技能>/scripts/gen_final.mjs" --job . --mode concat --seg seg --ass all.ass --out 成片.mp4
 
-# ⑥ 独立 SRT（逐句级，带 UTF-8 BOM）
+# ⑦ 独立 SRT（逐句级，带 UTF-8 BOM）
 node "<技能>/scripts/gen_srt.mjs" --job . --bounds bounds_cache.json --intro 2.5
 ```
 
 详细参数、时间轴公式、字体/画幅设置见 [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md)。
+
+### 演示素材
+
+README 顶部那个 GIF 是这么截的（同样可以用来录你自己 PPT 的演示）：
+
+```bash
+# 从成片里截 8 秒，压成 150 KB 上下、适合放进 README 的 GIF
+ffmpeg -y -ss 10.5 -t 8 -i 成片.mp4 \
+  -vf "fps=12,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" \
+  -loop 0 assets/demo.gif
+```
+
+挑片段的原则：**要包含一次翻页，且字幕正在滚动**——一眼就能看出这是「逐页讲解 + 字幕跟语音走」，而不是一张静态截图。
 
 ### 环境要求
 
@@ -147,8 +174,9 @@ node "<技能>/scripts/gen_srt.mjs" --job . --bounds bounds_cache.json --intro 2
 
 ### 这个技能的"资产"其实是踩坑清单
 
-脚本本身不难写，难的是那些**不报错但结果错**的坑。SKILL.md 里固化了 14 条实测踩坑，例如：
+脚本本身不难写，难的是那些**不报错但结果错**的坑。SKILL.md 里固化了 16 条实测踩坑，例如：
 
+- **字幕逐页累积偏移**：硬切成片漏传 `--t 0`，字幕每页早 0.5s —— 3 页早 1.0s、**50 页到末页早 24.5s**，全程零报错。这条是本仓库做端到端验证时抓到并修掉的。
 - **前 9 页整页漏写字幕**：语音边界缓存的键名可能是 `"1"` 也可能是 `"01"`，`cache.get("01")` 静默取空。
 - **多行文案导致整页字幕消失还报成功**：ASS 必须**先转义再拼 `\N`**；顺序反了会变成字面反斜杠+字母 N。
 - **edge-tts 7.x 事件名是 `SentenceBoundary` 不是 `WordBoundary`**，写错永远抓不到、静默 0 条。
@@ -156,7 +184,7 @@ node "<技能>/scripts/gen_srt.mjs" --job . --bounds bounds_cache.json --intro 2
 - **concat `-c copy` 的片头必须带实长静音音轨**，否则片头被截短还不报错。
 - **concat list 的相对路径以 list 文件所在目录为基准**，放错目录就 `Invalid argument`。
 
-全部 14 条 + 每条的现象/原因/修法见 [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#踩坑清单按踩的时间顺序)。
+全部 16 条 + 每条的现象/原因/修法见 [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#踩坑清单按踩的时间顺序)。
 
 ### 已知边界
 
@@ -237,7 +265,7 @@ Output size dropped from 119.5 MB to 47.9 MB. Because `master.mp4` has no subtit
 
 **Install:** copy `skills/ppt-to-explainer-video-ffmpeg/` into your agent runtime's skills directory (e.g. `~/.claude/skills/`).
 
-The real value of this skill is its **14 documented pitfalls** — bugs that produce wrong output *without* raising an error (subtitle-key mismatches, ASS escaping order, `zoompan` swallowing `-t`, silent audio in concat, …). See [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md).
+The real value of this skill is its **16 documented pitfalls** — bugs that produce wrong output *without* raising an error (cumulative subtitle drift from a mismatched `--t`, subtitle-key mismatches, ASS escaping order, `zoompan` swallowing `-t`, silent audio in concat, …). See [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md).
 
 ### License
 

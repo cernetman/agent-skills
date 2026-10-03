@@ -73,7 +73,16 @@ def main():
     segd = os.path.join(job, a.seg)
     os.makedirs(segd, exist_ok=True)
 
-    rows = json.load(open(os.path.join(job, a.rows), encoding="utf-8"))
+    rows_path = os.path.join(job, a.rows)
+    if not os.path.exists(rows_path):
+        raise SystemExit(
+            "[缺文件] %s\n"
+            "  这是 render_all.py 的必需输入,不会自动生成。它是逐页时长表,格式:\n"
+            "      [{\"page\": 1, \"dur\": 11.736}, {\"page\": 2, \"dur\": 10.872}]\n"
+            "  dur 用 ffprobe 量 mp3/NN.mp3 的真实时长(别用 bounds 累加,TTS 尾部静音也占画面时长):\n"
+            "      ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 mp3/01.mp3\n"
+            % rows_path)
+    rows = json.load(open(rows_path, encoding="utf-8"))
     rows.sort(key=lambda r: r["page"])
     total = len(rows)
 

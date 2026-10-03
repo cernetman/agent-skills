@@ -8,7 +8,31 @@
 node "<技能目录>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes <预计分钟>
 ```
 
-`precheck.mjs` 按 `PATH → /usr/bin → /usr/local/bin → 常见安装目录 → ~/bin` 依次探测 ffmpeg / ffprobe / 字体，并逐个试 `import edge_tts` 挑出真正可用的 Python 解释器。下面是不想用自检时的手动装法。
+`precheck.mjs` 按 `PATH → /usr/bin → /usr/local/bin → 常见安装目录 → ~/bin` 依次探测 ffmpeg / ffprobe / 字体，并逐个试 `import edge_tts` 挑出真正可用的 Python 解释器。
+
+自检输出长这样（路径已脱敏）：
+
+```
+=== 环境自检 ===
+✅ ffmpeg     可解析;实际可用性建议用 Bash 跑一次: ~/bin/ffmpeg.exe -version
+    ↳ ~/bin/ffmpeg.exe
+✅ ffprobe
+    ↳ ~/bin/ffprobe.exe
+✅ 中文字体
+    ↳ C:/Windows/Fonts/simhei.ttf
+✅ edge_tts
+    ↳ ~/.workbuddy/binaries/python/versions/3.13.12/python.exe
+❌ 页图         先跑抽页图(LibreOffice 转 PDF + pymupdf)
+    ↳ <JOBDIR>/pages
+✅ 磁盘预算       4 分钟 ≈ 53 MB
+    ↳ 预计成片
+
+合计 6 项,不通过 1 项 —— 先补齐再开工
+```
+
+注意最后一项「页图」在开工前必然是 ❌——那正是你要先做的第 1 步。其余 5 项全 ✅ 就说明环境没问题，可以开工。
+
+下面是不想用自检时的手动装法。
 
 ## 1. ffmpeg（必须，在 PATH 或显式传 `--ff`）
 
