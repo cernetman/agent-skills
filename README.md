@@ -200,6 +200,7 @@ agent-skills/
 │       └── scripts/          # 7 parameterized scripts (node + python)
 ├── tools/
 │   ├── validate-skills.mjs   # Validates every SKILL.md frontmatter block
+│   ├── check-links.py        # Checks relative links, anchors and frontmatter
 │   └── pack_skill.py         # Builds a distributable ZIP, with a leak check
 ├── assets/icon.png
 ├── CHANGELOG.md
@@ -212,6 +213,7 @@ Issues and PRs are welcome. Please make sure these pass locally first:
 
 ```bash
 node tools/validate-skills.mjs
+python tools/check-links.py
 python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist --leak-check
 ```
 

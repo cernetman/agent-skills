@@ -23,5 +23,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check links, anchors and skill frontmatter
+        run: python tools/check-links.py
+
       - name: Packaging smoke test (with leak check)
         run: python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist --leak-check
