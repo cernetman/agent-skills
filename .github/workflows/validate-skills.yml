@@ -16,12 +16,12 @@ jobs:
         with:
           node-version: "20"
 
-      - name: 校验 SKILL.md frontmatter
+      - name: Validate SKILL.md frontmatter
         run: node tools/validate-skills.mjs
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: 打包冒烟测试（含泄露检查）
+      - name: Packaging smoke test (with leak check)
         run: python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist --leak-check

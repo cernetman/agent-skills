@@ -1,13 +1,14 @@
-// gen_ass.mjs — 把每页 NN.txt 旁白文案转成 ASS 字幕(默认写进 ass/ 子目录),供 ffmpeg 硬烧。
+// gen_ass.mjs — turns each page's NN.txt narration script into ASS subtitles (written to the ass/ subdirectory by default) for ffmpeg to burn in.
 //
-// 2026-10-02 修复:
-//   1) 【静默损坏】旧版直接把 "\n" 拼进 Dialogue 行 -> 第二行缺 Dialogue: 头,libass 解析失败,
-//      该页字幕整条消失且脚本仍报 "DONE ass=N"。现在换行一律转成 ASS 硬换行标记 \N。
-//   2) 样式默认值 BorderStyle 改成 3(半透明黑底):旧版 1(纯描边)在有底色的 PPT 页上会被吃掉。
-//   3) 参数全部可传(--size/--font/--border/--align/--mv/--outline),不再是写死的 SimHei 40px。
-//   4) --outdir 默认 ass/,不再把 .ass 丢在和 .txt 同一层。
+// 2026-10-02 fixes:
+//   1) [silent corruption] The old version spliced "\n" straight into the Dialogue line -> the second line had no Dialogue: header, libass failed
+//      to parse it, that page's subtitle vanished entirely and the script still reported "DONE ass=N". Newlines are now always converted into the
+//      ASS hard line-break marker \N.
+//   2) The style's default BorderStyle is now 3 (semi-transparent black box): the old 1 (outline only) was swallowed on PPT pages with a colored background.
+//   3) Every parameter can now be passed in (--size/--font/--border/--align/--mv/--outline); no more hard-coded SimHei 40px.
+//   4) --outdir defaults to ass/, so .ass files are no longer dumped next to the .txt files.
 //
-// 用法: node gen_ass.mjs --job <JOBDIR> [--mode static|scroll] [--size 60] [--y 900]
+// Usage: node gen_ass.mjs --job <JOBDIR> [--mode static|scroll] [--size 60] [--y 900]
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -19,10 +20,10 @@ const JOB = arg("job", process.cwd());
 const OUT = arg("outdir", join(JOB, "ass"));
 const SIZE = arg("size", "60");
 const FONTNAME = arg("font", "SimHei");
-const BORDER = arg("border", "3");           // 0=描边 3=半透明黑底+描边
+const BORDER = arg("border", "3");           // 0=outline 3=semi-transparent black box + outline
 const OUTLINE = arg("outline", "3");
 const SHADOW = arg("shadow", "0");
-const ALIGN = arg("align", "2");            // 2=底部居中;滚动字幕用 7(左上)
+const ALIGN = arg("align", "2");            // 2=bottom center; use 7 (top left) for scrolling subtitles
 const MV = arg("mv", "90");
 const MODE = arg("mode", "static");
 
@@ -30,9 +31,9 @@ function esc(s) {
   return s.replace(/\\/g, "\\\\").replace(/,/g, "\\,").replace(/\{/g, "\\{").replace(/\}/g, "\\}");
 }
 
-// 换行必须是 ASS 硬换行 \N,不能是裸 \n。
-// ⚠️ 顺序:先逐行 esc,再用字面的 \N 连接 —— 如果先拼 \N 再整体 esc,
-//    esc 会把 \N 里的反斜杠变成 \\N,ASS 里就只剩一个字面反斜杠 + 字母 N(实测踩过)。
+// Newlines must be the ASS hard line break \N, never a bare \n.
+// ⚠️ Order matters: esc line by line first, then join with a literal \N — if you join \N first and esc the whole thing afterwards,
+//    esc turns the backslash inside \N into \\N, leaving only a literal backslash + the letter N in the ASS (measured the hard way).
 function toAssBody(text) {
   const lines = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   if (!lines.length) return null;
@@ -65,10 +66,10 @@ for (const f of files) {
   const body = toAssBody(raw);
   if (!body) continue;
   if (body.includes("\\N")) multi++;
-  // 单条事件:整页时长由 all.ass / --durations 决定,这里给 9:59:59.99 占位
+  // Single event: the full-page duration comes from all.ass / --durations, so 9:59:59.99 is just a placeholder here
   const ass = head + `Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,${esc(body)}\n`;
   writeFileSync(join(OUT, `${nn}.ass`), ass, "utf8");
   n++;
 }
-console.log(`DONE ass=${n} 目录=${OUT} 含换行的页=${multi} BorderStyle=${BORDER}`);
-if (multi) console.log("提示:含 \N 换行的页已按 ASS 硬换行处理(旧版会静默丢字幕)");
+console.log(`DONE ass=${n} outdir=${OUT} pages_with_line_breaks=${multi} BorderStyle=${BORDER}`);
+if (multi) console.log("Note: pages containing \N line breaks were handled as ASS hard line breaks (the old version silently dropped their subtitles)");

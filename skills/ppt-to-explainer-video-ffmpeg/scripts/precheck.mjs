@@ -1,11 +1,11 @@
-// precheck.mjs — 开工前环境自检,把"跑到一半才炸"变成"开局就知道缺啥"
+// precheck.mjs — preflight check before starting, turning "it blows up halfway through" into "you know from the outset what's missing"
 //
-// 2026-10-02 新增。实测踩到的真实坑:
-//   - PATH 里的 python3 是 3.14.3,**没有 edge_tts**;实际装包的是 3.13.12。
-//     照抄 `python3 -m edge_tts` 会直接 ModuleNotFoundError。
-//   - ffmpeg / ffprobe 是本技能强依赖,缺一个整条管线就断。
+// Added 2026-10-02. Real pitfalls hit in practice:
+//   - the python3 on PATH is 3.14.3 and has **no edge_tts**; the interpreter that actually has the package installed is 3.13.12.
+//     Copying `python3 -m edge_tts` gives you an immediate ModuleNotFoundError.
+//   - ffmpeg / ffprobe are hard dependencies of this skill; missing either one breaks the whole pipeline.
 //
-// 用法: node precheck.mjs [--job .] [--py <python.exe 路径>]
+// Usage: node precheck.mjs [--job .] [--py <path to python.exe>]
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -15,8 +15,8 @@ function arg(k, d) {
   const i = process.argv.indexOf("--" + k);
   return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : d;
 }
-// 候选路径探测(PATH 优先)——别把某一台机器的绝对路径写死,换机器就跑不动。
-// 全程不 spawn 外部进程,只做 existsSync。
+// Candidate path probing (PATH first) — don't hard-code one machine's absolute paths, or it stops working on another machine.
+// Nothing here spawns an external process; only existsSync.
 const JOB = arg("job", process.cwd());
 const firstOf = (cands) => { for (const c of cands) if (existsSync(c)) return c; return ""; };
 const FF = arg("ff", firstOf(["/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg",
@@ -29,30 +29,30 @@ const FONT = arg("font", firstOf(["C:/Windows/Fonts/simhei.ttf",
 const rows = [];
 const ok = (n, c, tip, extra = "") => rows.push([c ? "OK  " : "FAIL", n, extra, tip]);
 
-// 1) ffmpeg —— 只查"能不能解析到"。
-// ⚠️ 别用 Node spawn 去跑 ffmpeg:本机 Node spawn 外部进程会被沙箱挡(EBUSY / 无输出),
-//    自检会把自己绕死。所以这里只做路径解析,真实可用性建议用 Bash 跑一次: <FF> -version
-const resolved = (p) => (existsSync(p) ? p : (p.includes("/") || p.includes("\\") ? "" : p)); // 裸名=PATH 可解析
+// 1) ffmpeg — only checks whether it can be resolved.
+// ⚠️ Don't use Node spawn to run ffmpeg: on this machine spawning external processes from Node is blocked by the sandbox (EBUSY / no output),
+//    and the check would tie itself in knots. So this only resolves the path; for real availability run once through Bash: <FF> -version
+const resolved = (p) => (existsSync(p) ? p : (p.includes("/") || p.includes("\\") ? "" : p)); // bare name = resolvable via PATH
 const ffFound = resolved(FF);
 ok("ffmpeg", !!ffFound, FF, ffFound
-  ? "可解析;实际可用性建议用 Bash 跑一次: " + FF + " -version"
-  : "去 https://ffmpeg.org 下载,或确认 --ff 指向正确路径");
-// 2) ffprobe(段时长必须靠它):跟 ffmpeg 同目录,ffmpeg 在 PATH 上时则用裸名
+  ? "resolvable; for real availability run once through Bash: " + FF + " -version"
+  : "download it from https://ffmpeg.org, or make sure --ff points at the right path");
+// 2) ffprobe (segment durations depend on it): lives in the same directory as ffmpeg, or a bare name when ffmpeg is on PATH
 const probeName = FF.toLowerCase().endsWith(".exe") ? "ffprobe.exe" : "ffprobe";
 const ffprobe = arg("ffprobe", FF.endsWith(probeName) ? FF : FF.replace(/ffmpeg(\.exe)?$/, "") + probeName);
 const prFound = resolved(ffprobe);
-ok("ffprobe", !!prFound, ffprobe, prFound ? "" : ffFound ? "和 ffmpeg 同目录,一般一起装" : "先装上 ffmpeg 再来看这条");
-// 3) 中文字体
+ok("ffprobe", !!prFound, ffprobe, prFound ? "" : ffFound ? "normally installed alongside ffmpeg in the same directory" : "install ffmpeg first, then come back to this row");
+// 3) CJK font
 const fontFound = resolved(FONT);
-ok("中文字体", !!fontFound, FONT, fontFound ? "" : "装个 SimHei,或用 --font 指到别的.ttf");
-// 4) edge_tts:先把候选解释器都探一遍
+ok("CJK font", !!fontFound, FONT, fontFound ? "" : "install SimHei, or point --font at another .ttf");
+// 4) edge_tts: probe every candidate interpreter first
 const pys = [];
 const extra = arg("py", "");
 if (extra) pys.push(extra);
 try {
   pys.push(execFileSync("where", ["python"], { encoding: "utf8" }).trim().split(/\r?\n/)[0]);
 } catch {}
-// WorkBuddy 托管 python 的几种可能位置(用 homedir,不写死某台机器)
+// The places the WorkBuddy-managed python may live (uses homedir instead of hard-coding one machine)
 globDir(join(homedir(), ".workbuddy/binaries/python/versions"))
   .forEach((d) => pys.push(join(d, "python.exe")));
 function globDir(dir) {
@@ -67,27 +67,27 @@ for (const p of [...new Set(pys)]) {
     break;
   } catch {}
 }
-ok("edge_tts", !!hit, hit || "所有候选 python 都没装 edge_tts",
-  hit ? "" : "用装了包的那个 python: " +
-  `<你的python>/pip install edge-tts —— 注意 PATH 里的 python3 不一定是它,` +
-  "建议全程用绝对路径调用");
-// 5) 页图
+ok("edge_tts", !!hit, hit || "none of the candidate python installs has edge_tts",
+  hit ? "" : "use the python that has the package installed: " +
+  `<your python>/pip install edge-tts — note that the python3 on PATH is not necessarily that one,` +
+  "so prefer calling it by absolute path everywhere");
+// 5) page images
 const pagesDir = arg("pages", "pages");
 const pn = existsSync(join(JOB, pagesDir)) ? readdirSync(join(JOB, pagesDir)).filter((f) => /\.(png|jpg)$/i.test(f)).length : 0;
-ok("页图", pn > 0, join(JOB, pagesDir), pn ? `${pn} 张` : "先跑抽页图(LibreOffice 转 PDF + pymupdf)");
-// 6) 磁盘预算(只提示,不判定失败)
-//    Node 在 Windows 上拿不到 free space,改成按成片码率估算:
-//    1080p 30fps crf20 约 1.9 Mbps ≈ 时长(秒) × 0.22 MB
+ok("page images", pn > 0, join(JOB, pagesDir), pn ? `${pn} found` : "extract page images first (LibreOffice -> PDF + pymupdf)");
+// 6) disk budget (informational only, never fails the check)
+//    Node cannot read free space on Windows, so estimate it from the final bitrate instead:
+//    1080p 30fps crf20 is about 1.9 Mbps ≈ duration (seconds) × 0.22 MB
 const mc = arg("minutes", "");
 if (mc) {
   const est = parseFloat(mc) * 60 * 0.22;
-  ok("磁盘预算", est < 5000, "预计成片", `${mc} 分钟 ≈ ${est.toFixed(0)} MB`);
+  ok("disk budget", est < 5000, "estimated film size", `${mc} min ≈ ${est.toFixed(0)} MB`);
 }
 
 const bad = rows.filter((r) => r[0] === "FAIL");
-console.log("\n=== 环境自检 ===");
+console.log("\n=== Preflight check ===");
 for (const [s, n, loc, tip] of rows) {
   console.log(`${s === "OK  " ? "✅" : "❌"} ${n.padEnd(10)} ${loc}${tip ? "\n    ↳ " + tip : ""}`);
 }
-console.log(`\n合计 ${rows.length} 项,不通过 ${bad.length} 项${bad.length ? " —— 先补齐再开工" : " —— 可以开工"}\n`);
+console.log(`\ntotal ${rows.length} checks, ${bad.length} failed${bad.length ? " — fix them before starting" : " — ready to start"}\n`);
 if (bad.length) process.exit(2);

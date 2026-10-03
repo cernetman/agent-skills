@@ -1,5 +1,5 @@
-# 统一换行符：仓库内一律 LF，Windows 专用脚本除外
-# 这样在 Windows 上 clone 出来的 .mjs/.py 也能在 Linux/macOS 正常运行
+# Normalize line endings: always LF inside the repo, except for Windows-only scripts
+# This way .mjs/.py files cloned on Windows still run correctly on Linux/macOS
 * text=auto eol=lf
 
 *.png binary

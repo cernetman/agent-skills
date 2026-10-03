@@ -1,12 +1,12 @@
-// gen_srt.mjs — 生成独立 srt(时间轴含转场补偿 / 片头偏移)
+// gen_srt.mjs — generate a standalone srt (timeline includes transition compensation / intro offset)
 //
-// 2026-10-02 修复:
-//   1) 缺 NN.txt 时不再是裸 ENOENT 堆栈,而是指令你先跑哪一步。
-//   2) 默认从 bounds_cache.json 出**逐句级** srt(和硬字幕逐句一致);
-//      --source page 才回退成"每页一条"的老行为。
-//   3) 逐句重叠用 prev_end 裁掉(旧版会输出首尾交叉的坏 srt)。
-//   4) 输出带 UTF-8 BOM,中文播放器不乱码。
-//   5) --intro / --t / --src-dir / --durations 全部可传,不再写死。
+// 2026-10-02 fixes:
+//   1) A missing NN.txt no longer yields a bare ENOENT stack but tells you which step to run first.
+//   2) By default it emits a **sentence-level** srt from bounds_cache.json (matching the burned-in sentence-level subtitles);
+//      --source page falls back to the old "one cue per page" behavior.
+//   3) Sentence overlaps are trimmed with prev_end (the old version wrote a broken srt with crossing start and end times).
+//   4) The output carries a UTF-8 BOM so CJK players don't show mojibake.
+//   5) --intro / --t / --src-dir / --durations are all passable, no longer hard-coded.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -18,14 +18,14 @@ const JOB = arg("job", process.cwd());
 const DUR = arg("durations", "durations2.txt");
 const BOUNDS = arg("bounds", "bounds_cache.json");
 const TXT = arg("src-dir", "vo3");
-const OUT = arg("out", "成片字幕.srt");
+const OUT = arg("out", "final.srt");
 const INTRO = parseFloat(arg("intro", "0"));
 const T = parseFloat(arg("t", "0.5"));
 const SRC = arg("source", "auto"); // auto | bounds | page
 
 const dp = join(JOB, DUR);
 if (!existsSync(dp)) {
-  console.error("[错误] 找不到 " + DUR + "。先跑 render_all.py 生成时长表。");
+  console.error("[ERROR] cannot find " + DUR + ". Run render_all.py first to generate the duration table.");
   process.exit(1);
 }
 
@@ -57,7 +57,7 @@ const bounds = SRC === "bounds" ? loadBounds() : SRC === "auto" ? loadBounds() :
 let out = "";
 let cues = 0;
 let cum = 0;
-let outEnd = 0; // 上一条 srt 的结束时间,用来裁重叠(必须在 forEach 之前初始化)
+let outEnd = 0; // end time of the previous srt cue, used to trim overlaps (must be initialized before forEach)
 
 items.forEach((it, i) => {
   const start = cum - i * T + INTRO;
@@ -70,7 +70,7 @@ items.forEach((it, i) => {
       let a = start + off / 1e7;
       let b = start + (off + dur) / 1e7;
       if (b <= a) continue;
-      if (a < outEnd) a = outEnd; // 裁掉 TTS 边界带来的重叠
+      if (a < outEnd) a = outEnd; // trim the overlap introduced by TTS boundaries
       if (b <= a) continue;
       out += `${cues + 1}\n${fmt(a)} --> ${fmt(b)}\n${txt}\n\n`;
       outEnd = b;
@@ -81,7 +81,7 @@ items.forEach((it, i) => {
 
   const txtp = join(JOB, TXT, it.nn + ".txt");
   if (!existsSync(txtp)) {
-    console.error(`[跳过] ${txtp} 不存在 —— 先写上逐页旁白。`);
+    console.error(`[SKIP] ${txtp} does not exist — write the per-page narration first.`);
     return;
   }
   const text = readFileSync(txtp, "utf8").trim().replace(/\r?\n/g, " ");
@@ -90,4 +90,4 @@ items.forEach((it, i) => {
 });
 
 writeFileSync(join(JOB, OUT), out, "utf8");
-console.log(`写出 ${OUT}, ${cues} 条, intro=${INTRO}s`);
+console.log(`wrote ${OUT}, ${cues} cues, intro=${INTRO}s`);

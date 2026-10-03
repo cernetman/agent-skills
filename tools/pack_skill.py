@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把 skills/<name>/ 打成可上架的 ZIP（SKILL.md 必须位于压缩包第一层）。
+"""Package skills/<name>/ into a publishable ZIP (SKILL.md must be at the archive root).
 
-用法:
+Usage:
     python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist
     python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist --leak-check
 
-退出码: 0 成功 / 1 参数或校验失败 / 2 泄露检查未通过
+Exit codes: 0 success / 1 bad arguments or validation failure / 2 leak check failed
 """
 from __future__ import annotations
 
@@ -23,17 +23,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".venv", "venv", "dist"}
 SKIP_SUFFIX = (".pyc", ".zip", ".mp4", ".m4a", ".mp3")
 
-# 打包前要挡住的泄露特征
+# Leak patterns to block before packaging
 LEAK_PATTERNS = [
-    (re.compile(r"[A-Za-z]:[\\/]{1,2}Users[\\/]", re.I), "Windows 用户绝对路径"),
-    (re.compile(r"[A-Za-z]:[\\/]{1,2}(?:my files|Users|Documents|Desktop)[\\/]", re.I), "本机绝对路径"),
-    (re.compile(r"/(?:home|Users)/[^/\s\"']+/"), "Unix 用户绝对路径"),
-    (re.compile(r"(?:api[_-]?key|secret|passwd|password|access[_-]?token)\s*[=:]\s*\S+", re.I), "疑似密钥赋值"),
+    (re.compile(r"[A-Za-z]:[\\/]{1,2}Users[\\/]", re.I), "Windows user absolute path"),
+    (re.compile(r"[A-Za-z]:[\\/]{1,2}(?:my files|Users|Documents|Desktop)[\\/]", re.I), "local machine absolute path"),
+    (re.compile(r"/(?:home|Users)/[^/\s\"']+/"), "Unix user absolute path"),
+    (re.compile(r"(?:api[_-]?key|secret|passwd|password|access[_-]?token)\s*[=:]\s*\S+", re.I), "suspected secret assignment"),
 ]
 
 
 def collect(src: Path, name: str) -> list[tuple[Path, str]]:
-    """按 (磁盘路径, 压缩包内路径) 收集文件，SKILL.md 排在最前。"""
+    """Collect files as (disk path, in-archive path), with SKILL.md first."""
     files: list[tuple[Path, str]] = []
     for root, dirs, names in os.walk(src):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
@@ -52,13 +52,19 @@ def leak_scan(files: list[tuple[Path, str]], username: str) -> list[str]:
     for full, arc in files:
         for pat, label in LEAK_PATTERNS:
             if pat.search(arc):
-                hits.append(f"{arc}: 条目名命中{label}")
+                hits.append(f"{arc}: entry name matches {label}")
         try:
             text = full.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        if username and username.lower() in text.lower():
-            hits.append(f"{arc}: 正文出现本机用户名 {username!r}")
+        # Match the username on alphanumeric boundaries only. A plain substring
+        # test fires on any word that merely contains it (e.g. the maintainer's
+        # own handle inside "cernetman"), while this still catches the real
+        # cases: C:\Users\cerne\, /home/cerne/, cerne@host, user=cerne.
+        if username and re.search(
+            r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(username), text, re.I
+        ):
+            hits.append(f"{arc}: content contains the local username {username!r}")
         for pat, label in LEAK_PATTERNS:
             for m in pat.finditer(text):
                 hits.append(f"{arc}: {label} -> {m.group(0)[:60]!r}")
@@ -71,34 +77,34 @@ def read_version(skill_md: Path) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="打包 skills/<name> 为上架 ZIP")
-    ap.add_argument("--skill", required=True, help="skills/ 下的技能目录名")
-    ap.add_argument("--out", default="dist", help="输出目录，相对路径按仓库根算（默认 dist）")
-    ap.add_argument("--repo", default=str(REPO_ROOT), help="仓库根目录")
-    ap.add_argument("--version", help="覆盖文件名版本号（默认读 SKILL.md 的 version）")
-    ap.add_argument("--leak-check", action="store_true", help="打包前扫描用户名/绝对路径/疑似密钥")
+    ap = argparse.ArgumentParser(description="Package skills/<name> into a publishable ZIP")
+    ap.add_argument("--skill", required=True, help="name of the skill directory under skills/")
+    ap.add_argument("--out", default="dist", help="output directory; relative paths are resolved against the repo root (default: dist)")
+    ap.add_argument("--repo", default=str(REPO_ROOT), help="repository root directory")
+    ap.add_argument("--version", help="override the version in the file name (default: read version from SKILL.md)")
+    ap.add_argument("--leak-check", action="store_true", help="scan for usernames / absolute paths / suspected secrets before packaging")
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
     src = repo / "skills" / args.skill
     skill_md = src / "SKILL.md"
     if not skill_md.is_file():
-        print(f"[x] 找不到 {skill_md}", file=sys.stderr)
+        print(f"[x] {skill_md} not found", file=sys.stderr)
         return 1
 
     files = collect(src, args.skill)
     if not files:
-        print(f"[x] {src} 下没有可打包的文件", file=sys.stderr)
+        print(f"[x] no files to package under {src}", file=sys.stderr)
         return 1
 
     if args.leak_check:
         hits = leak_scan(files, getpass.getuser())
         if hits:
-            print("[x] 泄露检查未通过，已中止打包：", file=sys.stderr)
+            print("[x] leak check failed, packaging aborted:", file=sys.stderr)
             for h in hits:
                 print("   -", h, file=sys.stderr)
             return 2
-        print(f"[√] 泄露检查通过（{len(files)} 个文件）")
+        print(f"[√] leak check passed ({len(files)} files)")
 
     version = args.version or read_version(skill_md)
     out_dir = Path(args.out)
@@ -117,15 +123,15 @@ def main() -> int:
         broken = z.testzip()
         first = names[0]
 
-    print(f"\n打包文件数 = {len(names)}")
-    print(f"namelist 首项 = {first}")
-    print(f"完整性 = {'OK' if broken is None else 'BAD: ' + str(broken)}")
-    print(f"ZIP 大小 = {out_zip.stat().st_size / 1024:.1f} KB")
+    print(f"\nfiles packaged = {len(names)}")
+    print(f"first namelist entry = {first}")
+    print(f"integrity = {'OK' if broken is None else 'BAD: ' + str(broken)}")
+    print(f"ZIP size = {out_zip.stat().st_size / 1024:.1f} KB")
 
     if first != f"{args.skill}/SKILL.md" or broken is not None:
-        print("[x] 校验失败：SKILL.md 不在压缩包第一层，或 ZIP 损坏", file=sys.stderr)
+        print("[x] validation failed: SKILL.md is not at the archive root, or the ZIP is corrupt", file=sys.stderr)
         return 1
-    print(f"输出 = {out_zip}")
+    print(f"output = {out_zip}")
     return 0
 
 

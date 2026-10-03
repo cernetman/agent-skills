@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * 校验 skills/<name>/SKILL.md 的 YAML frontmatter 是否合法。
+ * Validate the YAML frontmatter of skills/<name>/SKILL.md.
  *
- * 检查项:
- *   1. skills/<name>/ 下存在 SKILL.md
- *   2. 有 YAML frontmatter 块
- *   3. frontmatter 的 name 与目录名一致，且符合 [a-z0-9-] 命名
- *   4. 有非空 description，且不超过 1024 字符
- *   5. 若声明了 version，需形如 x.y.z
+ * Checks:
+ *   1. SKILL.md exists under skills/<name>/
+ *   2. A YAML frontmatter block is present
+ *   3. The frontmatter name matches the directory name and follows the [a-z0-9-] naming rule
+ *   4. description is present, non-empty, and no longer than 1024 characters
+ *   5. If version is declared, it looks like x.y.z
  *
- * 用法: node tools/validate-skills.mjs
- * 退出码: 0 全部通过 / 1 有失败项
+ * Usage: node tools/validate-skills.mjs
+ * Exit codes: 0 all passed / 1 at least one failure
  */
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -23,7 +23,7 @@ const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const MAX_DESCRIPTION = 1024;
 
-/** 只解析顶层 "key: value" 标量，够用且不引第三方依赖。 */
+/** Parses only top-level "key: value" scalars; good enough, with no third-party dependency. */
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!m) return null;
@@ -37,13 +37,13 @@ function parseFrontmatter(text) {
 
 function main() {
   if (!existsSync(skillsDir)) {
-    console.error("[x] 找不到 skills/ 目录");
+    console.error("[x] skills/ directory not found");
     return 1;
   }
 
   const dirs = readdirSync(skillsDir).filter((d) => statSync(join(skillsDir, d)).isDirectory());
   if (dirs.length === 0) {
-    console.error("[x] skills/ 下没有任何技能目录");
+    console.error("[x] no skill directories under skills/");
     return 1;
   }
 
@@ -51,28 +51,28 @@ function main() {
   for (const dir of dirs.sort()) {
     const file = join(skillsDir, dir, "SKILL.md");
     if (!existsSync(file)) {
-      failures.push(`${dir}: 缺少 SKILL.md`);
+      failures.push(`${dir}: missing SKILL.md`);
       continue;
     }
 
     const fields = parseFrontmatter(readFileSync(file, "utf8"));
     if (!fields) {
-      failures.push(`${dir}: 没有 YAML frontmatter`);
+      failures.push(`${dir}: no YAML frontmatter`);
       continue;
     }
 
     const problems = [];
-    if (!fields.name) problems.push('缺少 "name"');
-    else if (fields.name !== dir) problems.push(`name "${fields.name}" 与目录名 "${dir}" 不一致`);
-    else if (!NAME_RE.test(fields.name)) problems.push(`name "${fields.name}" 不符合 [a-z0-9-] 命名`);
+    if (!fields.name) problems.push('missing "name"');
+    else if (fields.name !== dir) problems.push(`name "${fields.name}" does not match directory name "${dir}"`);
+    else if (!NAME_RE.test(fields.name)) problems.push(`name "${fields.name}" does not follow the [a-z0-9-] naming rule`);
 
-    if (!fields.description) problems.push('缺少 "description"');
+    if (!fields.description) problems.push('missing "description"');
     else if (fields.description.length > MAX_DESCRIPTION) {
-      problems.push(`description 长度 ${fields.description.length} > ${MAX_DESCRIPTION}`);
+      problems.push(`description length ${fields.description.length} > ${MAX_DESCRIPTION}`);
     }
 
     if (fields.version && !SEMVER_RE.test(fields.version)) {
-      problems.push(`version "${fields.version}" 不是 x.y.z`);
+      problems.push(`version "${fields.version}" is not x.y.z`);
     }
 
     if (problems.length > 0) failures.push(`${dir}: ${problems.join("; ")}`);
@@ -80,11 +80,11 @@ function main() {
   }
 
   if (failures.length > 0) {
-    console.error(`\n[x] ${failures.length} 个技能未通过校验：`);
+    console.error(`\n[x] ${failures.length} skill(s) failed validation:`);
     for (const f of failures) console.error("   -", f);
     return 1;
   }
-  console.log(`\n[√] ${dirs.length} 个技能全部通过校验`);
+  console.log(`\n[√] all ${dirs.length} skills passed validation`);
   return 0;
 }
 

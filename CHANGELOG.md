@@ -1,80 +1,86 @@
-# 更新日志
+# Changelog
 
-本文件记录本仓库全部技能的版本变更。
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+This file records version changes for all skills in this repository.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
-## [未发布] — 仓库首发前做端到端验证时发现并修复
+## [Unreleased] — found and fixed during end-to-end validation ahead of the repository's first release
 
-> 下面 9 项是把技能**真跑一遍**（3 页样例，配音 → 段渲染 → 拼接 → 烧字幕 → SRT）时暴露出来的问题，已直接修进本仓库。
-> 尚未回灌到市场版本（那侧仍是 1.1.0）；建议回灌后发 1.1.1。**其中前 6 项都会静默出错，务必回灌。**
+> The 9 items below are the problems that surfaced when the skill was **actually run end to end** (the 3-page sample: narration → segment rendering → concat → burned-in subtitles → SRT), and they are already fixed in this repository.
+> They have not yet been ported back to the marketplace version (which is still 1.1.0); after porting, cut 1.1.1. **The first 6 of them all fail silently, so they must be ported back.**
 
-### 修复
+### Changed
 
-- **字幕逐页累积偏移（静默出错，最严重）**：`gen_film_ass.py` 的 `--t` 默认 0.5（为 xfade 转场补偿），但三段式成片走 `--mode concat` **硬切**、没有重叠 → 字幕第 i 页提前 (i−1)×0.5s。3 页实测：画面在 11.736s / 22.608s 翻页，字幕却在 11.236s / 21.608s 就位；**50 页到末页早 24.5s**，全程不报错。修：硬切成片传 `--t 0`（SKILL.md 的示例和参数表已同步）；`--t` 非 0 时脚本会打印警告说明这个风险。
-- **`durations.json` 无处生成**：`render_all.py` 的 `--rows` 是必需输入，但原 7 步管线里没有任何脚本产出它，直接跑只得到裸 `FileNotFoundError` 堆栈。修：SKILL.md 第 4 步补上生成方法（用 `ffprobe` 量 `mp3/NN.mp3` 的真实时长，附现成一行命令）；`render_all.py` 改为输出带格式说明的友好报错。
-- **`gen_film_ass.py` 汇总文案报错数字**：`覆盖 %.1fs` 用的是 `max(durs.values())`（最长的那一页）而不是整片覆盖，3 页片报「覆盖 14.9s」（实际 37.5s）。修：改为按事件真实推进计算，输出 `时间轴覆盖 0 ~ 37.536s`——和成片时长对不上时一眼就能看出来。
-- **ASS 时间戳把毫秒写进了厘秒字段（最严重：整条字幕轨错位）**：`tss()` 用 `%02d` 输出毫秒余数（0~999），值 ≥100 时写出 3 位小数（`.100` / `.500` / `.999`）。ASS 规范里小数部分是**厘秒（固定 2 位）**，libass 按厘秒解析 → 小数部分**放大 10 倍**：声明 `0:00:00.100` 开始的事件，画面到 **1.0s** 才出现字幕；`.999` 差 9s。误差随每条时间戳的毫秒位跳动（0~9s），**全程零报错**。判定方法：把 ASS 单独渲染到黑底上，用 `setpts=PTS+T/TB` 定位时刻数白像素。修：按厘秒计算并固定输出 2 位（`gen_film_ass.py`、`gen_sentence_ass.py` 各一处）。
-- **`--mode static` 静默产出 0 条字幕（出来是一版没字幕的片子）**：`gen_film_ass.py` 查的是 `bounds.get(str(1))` = `"1"`，而 `bounds_cache.json` 的键是 `"01"`（`gen_sentence_ass.py` 自己写的）。后者有健壮的 `cache_get()` 会两种写法都探，但前者没用它；滚动模式靠「查不到就回退读 `vo3/NN.txt`」掩盖了这个 bug，静态模式没有回退 → 整片 0 条事件。修：两种键写法都探，并新增「一条事件都没有就拒绝写出字幕文件」的保护。
-- **静态字幕不换行、不居中**：两种模式共用一份写死的 ASS 头部（`WrapStyle: 2` + `Alignment 7` + `MarginV y` 全是滚动专用的）→ 静态长句不换行、直接冲出右边界。修：按模式生成头部 —— 滚动 `WrapStyle 2`/`Alignment 7`/`MarginV y`，静态 `WrapStyle 0`/`Alignment 2`/`MarginV h−y`，与 SKILL.md 的「字幕三形态」表一致。
-- **`--w/--h` 传了不生效（竖屏支持形同虚设）**：头部里 `PlayResX/PlayResY` 写死 1920×1080，`--w 1080 --h 1920` 不改变输出。修：头部改为读取 `--w/--h`（实测竖屏输出 `PlayResX: 1080` / `PlayResY: 1920`）。
-- **`esc()` 没有处理换行（踩坑 1 复发）**：多行文案会把裸换行拼进 `Dialogue` 行，第二行缺 `Dialogue:` 头 → libass 解析失败、**整条字幕消失且不报错**。踩坑清单里记了这条，但两个脚本的 `esc()` 都没实现。修：先按行转义，再用字面的 `\N` 连接。
-- **`--bounds` 健壮性**：带 BOM 的 JSON 会抛裸堆栈（只捕获了 `FileNotFoundError`），损坏 JSON 同样。修：改用 `utf-8-sig` 读取，损坏时给人类可读报错。
+- **This repository is now English-only.** The README, `SKILL.md`, this changelog, `references/setup.md`, every script comment and every user-facing message were translated. Two default output names changed along with it: `gen_final.mjs --out` now defaults to `final.mp4` and `gen_srt.mjs --out` to `final.srt` (both were non-ASCII names before, which also made them awkward in shell pipelines).
+- `gen_film_ass.py` now reports a missing duration table with a readable one-line message instead of a bare `FileNotFoundError` traceback, matching what `render_all.py` already did for its `--rows` input.
+- `tools/pack_skill.py`'s leak check now matches the local username on alphanumeric boundaries. A maintainer handle that merely contains it (for example `cernetman` versus the local account `cerne`) no longer trips the check, while real leaks such as `C:\Users\cerne\...` or `cerne@host` are still caught.
 
-### 文档
+### Fixed
 
-- `references/setup.md` 补上真实的自检输出示例，并说明「页图」一项在开工前**必然**是 ❌，避免被误判成环境故障。
-- 踩坑清单由 14 条扩到 18 条（新增上述「厘秒/毫秒」「`--t` 偏移」「`durations.json`」「两种模式共用头部」等条）。
+- **Subtitles accumulate a per-page offset (silent failure, most severe)**: `gen_film_ass.py` defaults `--t` to 0.5 (to compensate for xfade transitions), but the three-stage pipeline uses `--mode concat` with **hard cuts** and no overlap → subtitles for page *i* land (i−1)×0.5s early. Measured on 3 pages: the picture flips at 11.736s / 22.608s, but the subtitles settle at 11.236s / 21.608s; **at 50 pages the last page is 24.5s early**, with no error reported anywhere. Fix: pass `--t 0` for hard-cut output (the example and parameter table in SKILL.md are synced); when `--t` is non-zero the script now prints a warning describing this risk.
+- **`durations.json` had nowhere to come from**: `render_all.py` takes `--rows` as a required input, but no script in the original 7-step pipeline produced it, so running the pipeline directly just yielded a bare `FileNotFoundError` stack trace. Fix: SKILL.md step 4 now documents how to generate it (use `ffprobe` to measure the real duration of `mp3/NN.mp3`, with a ready-made one-liner); `render_all.py` now emits a friendly error message that explains the format.
+- **`gen_film_ass.py` reported the wrong number in its summary line**: it used `max(durs.values())` (the longest single page) rather than the coverage of the whole film, so a 3-page film reported `timeline covers 14.9s` when the real value is 37.5s. Fix: coverage is now computed from how the events actually advance, and the line reads `wrote <file>, N events, timeline covers 0 ~ 37.536s` — any mismatch with the final runtime is obvious at a glance.
+- **ASS timestamps wrote milliseconds into the centiseconds field (most severe: the entire subtitle track is misaligned)**: `tss()` used `%02d` to print the millisecond remainder (0–999), so values ≥100 produced three decimal places (`.100` / `.500` / `.999`). In the ASS specification the fractional part is **centiseconds (fixed at 2 digits)**, and libass parses it as centiseconds → the fractional part is **inflated 10×**: an event declared to start at `0:00:00.100` only shows its subtitle at **1.0s**; `.999` is off by 9s. The error jumps around with the millisecond digits of each timestamp (0–9s), **with zero errors reported throughout**. How to confirm it: render the ASS alone onto a black background and use `setpts=PTS+T/TB` to seek to a known instant and count white pixels. Fix: compute in centiseconds and always print 2 digits (one place each in `gen_film_ass.py` and `gen_sentence_ass.py`).
+- **`--mode static` silently produced 0 subtitles (the result was a film with no subtitles at all)**: `gen_film_ass.py` looked up `bounds.get(str(1))` = `"1"`, whereas the keys in `bounds_cache.json` are `"01"` (as written by `gen_sentence_ass.py` itself). The latter has a robust `cache_get()` that probes both spellings, but the former did not use it; rolling mode masked the bug by falling back to reading `vo3/NN.txt` when the lookup failed, but static mode has no fallback → 0 events across the whole film. Fix: probe both key spellings, and add a safeguard that refuses to write a subtitle file when there are no events at all.
+- **Static subtitles did not wrap or center**: both modes shared one hard-coded ASS header (`WrapStyle: 2` + `Alignment 7` + `MarginV y`, all of which are specific to rolling subtitles) → long static sentences ran off the right edge instead of wrapping. Fix: generate the header per mode — rolling uses `WrapStyle 2`/`Alignment 7`/`MarginV y`, static uses `WrapStyle 0`/`Alignment 2`/`MarginV h−y`, matching the "three subtitle forms" table in SKILL.md.
+- **`--w`/`--h` had no effect when passed (portrait support was effectively useless)**: the header hard-coded `PlayResX/PlayResY` at 1920×1080, so `--w 1080 --h 1920` did not change the output. Fix: the header now reads `--w`/`--h` (measured portrait output gives `PlayResX: 1080` / `PlayResY: 1920`).
+- **`esc()` did not handle line breaks (pitfall 1 recurring)**: multi-line copy spliced raw newlines into the `Dialogue` line, leaving the second line without a `Dialogue:` prefix → libass parsing fails and **the whole subtitle disappears without any error**. This entry was already in the pitfall list, but neither script's `esc()` implemented it. Fix: escape line by line first, then join with a literal `\N`.
+- **`--bounds` robustness**: JSON with a BOM threw a bare stack trace (only `FileNotFoundError` was caught), and so did corrupted JSON. Fix: read with `utf-8-sig` and give a human-readable error when the file is corrupted.
+
+### Documentation
+
+- `references/setup.md` now includes a real preflight output sample and explains that the `page images` item is **inevitably** ❌ before you start work, so it is not mistaken for an environment failure.
+- The pitfall list grew from 14 to 18 entries (adding the "centiseconds vs. milliseconds", "`--t` offset", "`durations.json`", and "shared header across both modes" items above).
 
 ## [1.1.0] - 2026-10-02
 
-技能：`ppt-to-explainer-video-ffmpeg`
+Skill: `ppt-to-explainer-video-ffmpeg`
 
-### 新增
+### Added
 
-- **滚动跑马灯字幕**：字幕从右往左滚动、与语音逐句精确同步（实测 6.6–9.1 字/秒），字号可调；原有「静态逐句字幕」继续保留，两种形态按页切换。
-- **片头卡片 + 末页定格**：可生成 3 秒文字片头（支持缓慢推镜与淡入淡出），末页可多定格 N 秒收尾。
-- **脚本 3 个 → 7 个，全部参数化**：`precheck`（开工前环境自检）/ `gen_sentence_ass`（配音+字幕一步做完）/ `render_all`（并行段渲染）/ `gen_film_ass`（整片绝对时间轴）/ `gen_final`（成片合成，双模式）/ `gen_ass` / `gen_srt`。路径、段名、输出名、画幅、字号、转场、CRF 均可通过参数指定。
-- **独立 SRT 导出升级为逐句级**（原来只能整页一条），带 UTF-8 BOM，中文播放器不乱码。
-- **竖屏支持**（1080×1920 分镜）。
+- **Rolling marquee subtitles**: subtitles scroll right to left, precisely synchronized sentence by sentence with the speech (measured at 6.6–9.1 characters/second), with adjustable font size; the original "static per-sentence subtitles" remain available, and each page switches between the two forms.
+- **Opening card + frozen final page**: can generate a 3-second text opening (with slow push-in and fade in/out support), and the final page can be frozen for an extra N seconds as an outro.
+- **Scripts grew from 3 to 7, all parameterized**: `precheck` (environment preflight check before starting) / `gen_sentence_ass` (narration + subtitles in one step) / `render_all` (parallel segment rendering) / `gen_film_ass` (absolute timeline for the whole film) / `gen_final` (final compositing, dual mode) / `gen_ass` / `gen_srt`. Paths, segment names, output names, frame size, font size, transitions, and CRF can all be specified via parameters.
+- **Standalone SRT export upgraded to per-sentence granularity** (previously only one cue per page), with a UTF-8 BOM so Chinese text is not garbled in Chinese-language players.
+- **Portrait support** (1080×1920 storyboard).
 
-### 变更
+### Changed
 
-- 采用「段渲染（并行）→ `-c copy` 硬切拼接 → 单遍烧字幕」三段式，替换原来「逐段烧字幕 + N-1 级 xfade」的做法。
-- **成片默认转场由「交叉淡入」改为「硬切 + 字幕时间轴」**。依赖淡入观感的老用户请显式传 `--mode xfade`。
-- 环境依赖改为自动探测，**脚本不再固化任何机器的绝对路径**；需要时用 `--ff` / `--ffprobe` / `--font` / `--py` 显式指定。
+- Adopted the three-stage approach "segment rendering (parallel) → `-c copy` hard-cut concat → burn subtitles in a single pass", replacing the previous "burn subtitles per segment + N-1 levels of xfade".
+- **The default transition for the final film changed from cross-fade to hard cut + subtitle timeline**. Users who rely on the cross-fade look should pass `--mode xfade` explicitly.
+- Environment dependencies are now auto-detected, and **the scripts no longer hard-code absolute paths for any particular machine**; specify them explicitly with `--ff` / `--ffprobe` / `--font` / `--py` when needed.
 
-### 性能
+### Performance
 
-50 页 / 1920×1080 / 30fps 实测：
+Measured at 50 pages / 1920×1080 / 30fps:
 
-| 环节 | 1.0.0 | 1.1.0 |
+| Stage | 1.0.0 | 1.1.0 |
 |---|---|---|
-| 段渲染 | 65 s（串行、段内烧字幕） | 41.7 s（并行 `--j 4`、不烧字幕） |
-| 转场拼接 | 63 s（49 级 xfade，每级重编全片） | 1.4 s（硬切，0 重编码） |
-| 烧字幕 | 含在段渲染里 | 全片只 1 遍：47.5 s（medium）/ 34.8 s（veryfast） |
-| **合计** | **128 s** | **90.6 s（-29%）**，veryfast 档 77.9 s（-39%） |
+| Segment rendering | 65 s (serial, subtitles burned per segment) | 41.7 s (parallel `--j 4`, no subtitles burned) |
+| Transition concat | 63 s (49 levels of xfade, re-encoding the whole film each time) | 1.4 s (hard cut, 0 re-encodes) |
+| Burning subtitles | included in segment rendering | once for the whole film: 47.5 s (medium) / 34.8 s (veryfast) |
+| **Total** | **128 s** | **90.6 s (-29%)**, 77.9 s on the veryfast preset (-39%) |
 
-整片回归：时长 464.5 s → 492.1 s，体积 119.5 MB → 47.9 MB（旧版的 40%），码率 2059 → 778 kbps，抽帧目测文字清晰度不变。
+Full-film regression: duration 464.5 s → 492.1 s, size 119.5 MB → 47.9 MB (40% of the old version), bitrate 2059 → 778 kbps, and text sharpness looks unchanged when sampling frames by eye.
 
-附带收益：拼接产物 `master.mp4` 是**无字幕母版**——换字幕形态、改片头都不必重新配音、不必重渲段。
+A bonus benefit: the concat output `master.mp4` is a **subtitle-free master** — changing the subtitle form or the opening card requires neither re-recording the narration nor re-rendering the segments.
 
-### 修复
+### Fixed
 
-- **前 9 页整页漏写字幕**：语音边界缓存的键名 `"1"` 与 `"01"` 不匹配导致静默取空。
-- **多行文案导致整页字幕消失**：ASS 拼接顺序错误（应先转义再拼 `\N`）。
-- **拼接后丢失音频**：片头缺少静音音轨。
-- **指定片头却静默不出片头**：改为报错退出并给出修复提示。
-- SRT 首尾时间重叠；缺输入时报裸堆栈（改为人类可读提示）。
+- **The first 9 pages were missing subtitles entirely**: the voice-boundary cache had keys `"1"` and `"01"` that did not match, causing a silent empty lookup.
+- **Multi-line copy made a whole page's subtitles disappear**: the ASS concatenation order was wrong (escaping must happen before joining with `\N`).
+- **Audio was lost after concat**: the opening card lacked a silent audio track.
+- **An opening card was requested but silently not produced**: now the script exits with an error and a fix hint.
+- SRT start/end times overlapped; missing inputs produced a bare stack trace (now a human-readable message).
 
 ## [1.0.0] - 2026-09-28
 
-技能：`ppt-to-explainer-video-ffmpeg`
+Skill: `ppt-to-explainer-video-ffmpeg`
 
-### 新增
+### Added
 
-- 首个版本：PPT/PDF → 逐页讲解视频（页图 + edge-tts 中文旁白 + 硬字幕 + xfade 交叉淡入转场）。
-- 3 个脚本：页图/配音/字幕生成、分段渲染、xfade 成片合成。
-- 纯本地渲染，不依赖在线转写服务，素材不上传。
+- First release: PPT/PDF → page-by-page explainer video (page images + edge-tts Chinese narration + burned-in subtitles + xfade cross-fade transitions).
+- 3 scripts: page image / narration / subtitle generation, segment rendering, and xfade compositing into the final film.
+- Fully local rendering: no dependency on online transcription services, and no assets are uploaded.
 
 [1.1.0]: https://github.com/__GH_USER__/agent-skills/releases/tag/v1.1.0
 [1.0.0]: https://github.com/__GH_USER__/agent-skills/releases/tag/v1.0.0

@@ -1,18 +1,19 @@
-// gen_final.mjs — 成片合成,两种模式
+// gen_final.mjs — final film assembly, two modes
 //
-//   --mode concat  【新·推荐】三段式:段不烧字幕 -> -c copy 硬切拼接 -> 单遍烧字幕
-//                  实测(50 页 7:47 片): 段渲染 41.7s(并行 j=4) + 硬切 1.4s + 烧字幕 47.5s(medium)
-//                  对比旧做法(段内烧字幕 + 49 级 xfade): 65s + 63s = 128s  →  总耗时约 -30%
-//                  额外好处:master.mp4 是"无字幕母版",改片头/换字幕版不必重新配音,拼 master 本身 0 编码。
+//   --mode concat  [new · recommended] three-stage: segments stay subtitle-free -> hard-cut concat with -c copy -> single-pass subtitle burn
+//                  measured (50 pages, 7:47 film): segment rendering 41.7s (parallel j=4) + hard cut 1.4s + subtitle burn 47.5s (medium)
+//                  versus the old approach (burn inside segments + 49 levels of xfade): 65s + 63s = 128s  →  about -30% total time
+//                  extra benefit: master.mp4 is a "subtitle-free master", so changing the intro or swapping subtitle versions needs no
+//                  re-recording, and building master itself costs 0 encodes.
 //
-//   --mode xfade   【旧·兼容】段内已烧字幕,再做 N-1 级 xfade/acrossfade 交叉淡入。
+//   --mode xfade   [old · legacy] subtitles were already burned inside the segments, then N-1 levels of xfade/acrossfade cross-fade.
 //
-// 2026-10-02 修复:ffmpeg 路径 / 段名前缀 / 输出名 / 转场时长 全部可传,不再硬编码;
-//               durations2.txt 缺失时给的是「先跑哪一步」的人话,不是裸 ENOENT 堆栈。
+// 2026-10-02 fixes: ffmpeg path / segment name prefix / output name / transition duration are all passable, no longer hard-coded;
+//               when durations2.txt is missing you get plain-language advice about which step to run first, not a bare ENOENT stack.
 //
-// 用法(新三段式):
-//   node gen_final.mjs --job . --mode concat --seg seg --ass all.ass --out 成片.mp4
-//   node gen_final.mjs --job . --mode xfade --seg seg --out 成片.mp4
+// Usage (new three-stage):
+//   node gen_final.mjs --job . --mode concat --seg seg --ass all.ass --out final.mp4
+//   node gen_final.mjs --job . --mode xfade --seg seg --out final.mp4
 import { readFileSync, writeFileSync, existsSync, accessSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -22,7 +23,7 @@ function arg(k, d) {
   return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : d;
 }
 const JOB = arg("job", process.cwd()).replace(/\\/g, "/");
-// ffmpeg 自动探测(PATH 优先),避免把某个机器的绝对路径固化进去;始终可用 --ff 覆盖
+// ffmpeg auto-detection (PATH first) so no single machine's absolute path gets baked in; --ff always overrides
 const firstOf = (cands, fallback = "ffmpeg") => {
   for (const c of cands) {
     try { accessSync(c); return c; } catch {}
@@ -35,33 +36,33 @@ const MODE = arg("mode", "concat");
 const SEG = arg("seg", "seg");
 const DUR = arg("durations", "durations2.txt");
 const ASS = arg("ass", "all.ass");
-const OUT = arg("out", "成片.mp4");
+const OUT = arg("out", "final.mp4");
 const MASTER = arg("master", "master.mp4");
-const INTRO = arg("intro", "");           // 片头 mp4(无音轨或带音轨都行)
-const INTRO_T = parseFloat(arg("intro-t", "0.5"));  // 0 = 硬切(走 -c copy)
+const INTRO = arg("intro", "");           // intro mp4 (with or without an audio track)
+const INTRO_T = parseFloat(arg("intro-t", "0.5"));  // 0 = hard cut (goes through -c copy)
 const PRESET = arg("preset", "medium");
 const CRF = arg("crf", "20");
 const T = parseFloat(arg("transition", "0.5"));
 
 function die(msg) {
-  console.error("[错误] " + msg);
+  console.error("[ERROR] " + msg);
   process.exit(1);
 }
 
 const dp = join(JOB, DUR);
 if (!existsSync(dp)) {
-  die(`找不到 ${DUR}。它是渲染阶段产出的每页时长表,先跑:
-     python <技能>/scripts/render_all.py --job <JOBDIR> --rows durations.json --j 4
-   (render_all.py 结束后会把这张表写成 durations2.txt)`);
+  die(`cannot find ${DUR}. It is the per-page duration table produced by the rendering stage, so run this first:
+     python <skill>/scripts/render_all.py --job <JOBDIR> --rows durations.json --j 4
+   (render_all.py writes this table out as durations2.txt when it finishes)`);
 }
 
 const items = readFileSync(dp, "utf8").trim().split(/\r?\n/).filter(Boolean).map((l) => {
   const [nn, d] = l.split("=");
   return { nn: nn.trim(), d: parseFloat(d) };
 });
-if (items.length < 2) die(`durations2.txt 只有 ${items.length} 段,至少要 2 段才能拼。`);
+if (items.length < 2) die(`durations2.txt only has ${items.length} segments; at least 2 are needed to concat.`);
 
-const N = items.length; // 在 concat / xfade 两个分支之外声明,两个模式都要用
+const N = items.length; // declared outside both the concat and xfade branches, since both modes need it
 const segList = items.map((it) => `file '${SEG}/${it.nn}.mp4'`).join("\n") + "\n";
 const concatList = join(JOB, "concat_list.txt");
 writeFileSync(concatList, segList);
@@ -70,20 +71,20 @@ const inputs = items.map((it) => `-i "${SEG}/${it.nn}.mp4"`).join(" ");
 const sh = [];
 
 if (MODE === "concat") {
-  // concat 模式下片头直接进 concat_list(硬切,-c copy,0 重编码)。
-  // ⚠️ concat 要求各段流一致:片头 mp4 必须带一条**静音音轨**,否则输出会丢音频。
-  //   生成片头时加 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -shortest
+  // In concat mode the intro goes straight into concat_list (hard cut, -c copy, 0 re-encodes).
+  // ⚠️ concat requires identical streams across all segments: the intro mp4 must carry a **silent audio track**, otherwise the output loses audio.
+  //   When generating the intro, add -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -shortest
   const files = items.map((it) => `file '${SEG}/${it.nn}.mp4'`);
   if (INTRO) {
-    // 传了 --intro 却找不到文件:必须报错退出。
-    // 否则 existsSync 判空会整段跳过,成片静默丢片头还不吭声。
+    // --intro was passed but the file is missing: this has to fail loudly.
+    // Otherwise existsSync returning false silently skips the whole block, and the film loses its intro without a word.
     if (!existsSync(join(JOB, INTRO))) {
-      console.error(`[错误] 找不到片头 ${INTRO} —— 先生成它(要用 anullsrc 做一条实长静音音轨,` +
-        `配合 -c copy 硬切,否则输出会丢音频)。`);
+      console.error(`[ERROR] cannot find the intro ${INTRO} — generate it first (use anullsrc to build a real-length silent audio track ` +
+        `so it survives the -c copy hard cut, otherwise the output loses audio).`);
       process.exit(1);
     }
     if (INTRO_T > 0) {
-      // 要交叉淡入就必须整片重编一遍(比硬切多 ~79s/7分钟片),非必要别开
+      // A cross-fade means re-encoding the whole film (~79s more for a 7-minute film than a hard cut); don't enable it unless you need it
       const off = (parseFloat(arg("intro-dur", "3")) - INTRO_T).toFixed(3);
       sh.push(`"${FF}" -y -f concat -safe 0 -i concat_list.txt -c copy "${MASTER}"`);
       sh.push(`"${FF}" -y -i "${INTRO}" -i "${MASTER}" ` +
@@ -91,17 +92,17 @@ if (MODE === "concat") {
         `[v0][v1]xfade=transition=fade:duration=${INTRO_T}:offset=${off}[vo]" ` +
         `-map "[vo]" -map 1:a -c:v libx264 -preset ${PRESET} -crf ${CRF} -pix_fmt yuv420p -r 30 -c:a aac -b:a 192k "${MASTER}"`);
     } else {
-      files.unshift(`file '${INTRO}'`); // 硬切片头:进 concat_list,零重编码
+      files.unshift(`file '${INTRO}'`); // hard-cut intro: goes into concat_list, zero re-encodes
     }
   }
   writeFileSync(concatList, files.join("\n") + "\n");
-  // 1) 硬切拼接母版(不重编码)
+  // 1) hard-cut concat the master (no re-encode)
   sh.unshift(`"${FF}" -y -f concat -safe 0 -i concat_list.txt -c copy "${MASTER}"`);
-  // 3) 单遍烧字幕(这是唯一一次全片重编码)
+  // 3) single-pass subtitle burn (the only full-film re-encode)
   sh.push(`"${FF}" -y -i "${MASTER}" -vf "subtitles='${ASS.split("/").pop()}'" ` +
     `-c:v libx264 -preset ${PRESET} -crf ${CRF} -pix_fmt yuv420p -r 30 -c:a copy "${OUT}"`);
 } else {
-  // 旧:段内已烧字幕 + N-1 级 xfade
+  // legacy: subtitles already burned inside the segments + N-1 levels of xfade
   const vparts = [];
   let cum = 0;
   for (let k = 1; k < N; k++) {
@@ -120,5 +121,5 @@ if (MODE === "concat") {
 
 const path = join(JOB, "render_final.sh");
 writeFileSync(path, "#!/bin/bash\ncd \"" + JOB + "\"\n" + sh.join("\n") + "\n", "utf8");
-console.log(`模式=${MODE} 段数=${N} 预计时长≈${(items.reduce((a, b) => a + b.d, 0) - (MODE === "xfade" ? (N - 1) * T : 0)).toFixed(1)}s`);
-console.log("已写 " + path + " —— 用 Bash 工具执行它(别在 Node 里 spawn ffmpeg)。");
+console.log(`mode=${MODE} segments=${N} estimated duration≈${(items.reduce((a, b) => a + b.d, 0) - (MODE === "xfade" ? (N - 1) * T : 0)).toFixed(1)}s`);
+console.log("wrote " + path + " — execute it with the Bash tool (do not spawn ffmpeg from inside Node).");

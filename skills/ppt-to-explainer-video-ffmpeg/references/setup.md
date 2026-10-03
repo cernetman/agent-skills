@@ -1,80 +1,80 @@
-# 运行环境准备（PPT → 逐页讲解视频）
+# Preparing the runtime environment (PPT → page-by-page explainer video)
 
-本技能纯本地运行，依赖三样东西：**ffmpeg**、**Python 3 + edge-tts**、**一款中文字体**。
+This skill runs entirely locally and depends on three things: **ffmpeg**, **Python 3 + edge-tts**, and **a Chinese font**.
 
-先跑自检，它会一次性告诉你缺哪一项：
+Run the preflight check first; it tells you in one shot which item is missing:
 
 ```bash
-node "<技能目录>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes <预计分钟>
+node "<SKILL_DIR>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes <ESTIMATED_MINUTES>
 ```
 
-`precheck.mjs` 按 `PATH → /usr/bin → /usr/local/bin → 常见安装目录 → ~/bin` 依次探测 ffmpeg / ffprobe / 字体，并逐个试 `import edge_tts` 挑出真正可用的 Python 解释器。
+`precheck.mjs` probes ffmpeg / ffprobe / fonts in the order `PATH → /usr/bin → /usr/local/bin → common install locations → ~/bin`, and tries `import edge_tts` on each interpreter to single out the Python one that actually works.
 
-自检输出长这样（路径已脱敏）：
+The preflight output looks like this (real output, paths redacted):
 
 ```
-=== 环境自检 ===
-✅ ffmpeg     可解析;实际可用性建议用 Bash 跑一次: ~/bin/ffmpeg.exe -version
+=== Preflight check ===
+✅ ffmpeg     resolvable; for real availability run once through Bash: ~/bin/ffmpeg.exe -version
     ↳ ~/bin/ffmpeg.exe
 ✅ ffprobe
     ↳ ~/bin/ffprobe.exe
-✅ 中文字体
+✅ CJK font
     ↳ C:/Windows/Fonts/simhei.ttf
 ✅ edge_tts
     ↳ ~/.workbuddy/binaries/python/versions/3.13.12/python.exe
-❌ 页图         先跑抽页图(LibreOffice 转 PDF + pymupdf)
+❌ page images extract page images first (LibreOffice -> PDF + pymupdf)
     ↳ <JOBDIR>/pages
-✅ 磁盘预算       4 分钟 ≈ 53 MB
-    ↳ 预计成片
+✅ disk budget 4 min ≈ 53 MB
+    ↳ estimated film size
 
-合计 6 项,不通过 1 项 —— 先补齐再开工
+total 6 checks, 1 failed — fix them before starting
 ```
 
-注意最后一项「页图」在开工前必然是 ❌——那正是你要先做的第 1 步。其余 5 项全 ✅ 就说明环境没问题，可以开工。
+The last item, `page images`, is inevitably ❌ before you start work — that is precisely the first step you have to do. Once the other 5 items are all ✅, the environment is fine and you can begin.
 
-下面是不想用自检时的手动装法。
+The manual installation steps below are for when you would rather skip the preflight check.
 
-## 1. ffmpeg（必须，在 PATH 或显式传 `--ff`）
+## 1. ffmpeg (required; on PATH or passed explicitly with `--ff`)
 
-- **Windows**：`winget install ffmpeg` / `scoop install ffmpeg` / `choco install ffmpeg`；或到 <https://www.gyan.dev/ffmpeg/builds> 下载 essentials 版，解压后把 `bin` 加进 PATH。
-- **macOS**：`brew install ffmpeg`
-- **Linux (Debian/Ubuntu)**：`sudo apt install ffmpeg`
-- 验证：`ffmpeg -version` 有输出即可。
-- 不想加 PATH 时，给脚本传 `--ff /path/to/ffmpeg --ffprobe /path/to/ffprobe`。
+- **Windows**: `winget install ffmpeg` / `scoop install ffmpeg` / `choco install ffmpeg`; or download the essentials build from <https://www.gyan.dev/ffmpeg/builds>, unzip it, and add `bin` to PATH.
+- **macOS**: `brew install ffmpeg`
+- **Linux (Debian/Ubuntu)**: `sudo apt install ffmpeg`
+- Verify: `ffmpeg -version` producing output is enough.
+- If you would rather not touch PATH, pass `--ff /path/to/ffmpeg --ffprobe /path/to/ffprobe` to the script.
 
-## 2. Python 3 + edge_tts（TTS 配音，免 key）
+## 2. Python 3 + edge_tts (TTS narration, no key required)
 
-- 需 Python 3.10+。
-- 安装引擎：`pip install edge_tts`（微软 Azure 免费神经语音，无需账号/密钥，**但合成时要联网**）。
-- 验证：`python3 -m edge_tts --list-voices | grep -i xiaoxiao`（Windows 用 `findstr /i xiaoxiao`）能看到 `zh-CN-XiaoxiaoNeural` 即正常。
-- 换音色：`--voice zh-CN-YunxiNeural`（男声）等，列全部用 `--list-voices`。
+- Requires Python 3.10+.
+- Install the engine: `pip install edge_tts` (Microsoft Azure's free neural voices, no account or key needed, **but synthesis requires an internet connection**).
+- Verify: `python3 -m edge_tts --list-voices | grep -i xiaoxiao` (on Windows use `findstr /i xiaoxiao`) — if you can see `zh-CN-XiaoxiaoNeural`, it is working.
+- Change the voice: `--voice zh-CN-YunxiNeural` (male), and so on; list them all with `--list-voices`.
 
-> **多解释器是常见坑**：PATH 里的 `python3` 可能正好是没装 `edge_tts` 的那个。用 `precheck.mjs` 挑，或直接 `--py <python.exe>` 指定。
+> **Multiple interpreters are a common pitfall**: the `python3` on your PATH may be exactly the one without `edge_tts` installed. Let `precheck.mjs` pick one, or point directly at one with `--py <python.exe>`.
 
-## 3. 中文字体（字幕渲染）
+## 3. Chinese font (subtitle rendering)
 
-- **Windows**：自带 `SimHei`（黑体），无需额外安装，脚本默认就用它。
-- **Linux**：装 `fonts-noto-cjk` 或 `wqy-zenhei`，并给脚本传 `--font "Noto Sans CJK SC"`（或同步改 ASS 样式行的 `Fontname`）。
-- **macOS**：`PingFang SC`，或装 `Noto Sans CJK SC`。
+- **Windows**: ships with `SimHei` (Hei), so no extra installation is needed and the scripts use it by default.
+- **Linux**: install `fonts-noto-cjk` or `wqy-zenhei`, and pass `--font "Noto Sans CJK SC"` to the script (or change `Fontname` in the ASS style line as well).
+- **macOS**: `PingFang SC`, or install `Noto Sans CJK SC`.
 
-## 4. 页图怎么来（管线的第 1 步输入）
+## 4. Where the page images come from (the first input of the pipeline)
 
-技能接收 `01.png … NN.png` 作为每页画面，三种导出方式任选：
+The skill takes `01.png … NN.png` as the picture for each page; pick any one of the three export routes:
 
-- **PowerPoint / WPS**：文件 → 导出 → 图片（PNG），按顺序命名。
-- **LibreOffice**（没装 Office 时）：
+- **PowerPoint / WPS**: File → Export → Images (PNG), naming them in order.
+- **LibreOffice** (when Office is not installed):
   ```bash
   soffice --headless --convert-to pdf x.pptx
   python -c "import fitz,sys; d=fitz.open('x.pdf'); [p.get_pixmap(matrix=fitz.Matrix(2,2)).save(f'{i+1:02d}.png') for i,p in enumerate(d)]"
   ```
-  （本机 ffmpeg 常不带 PDF 解码器，所以走 PDF → pymupdf 抽图，而不是让 ffmpeg 直接读 PDF。）
-- **已装 `ppt-explain` 技能**：`node <ppt-explain>/scripts/doc-to-pages.mjs --input x.pptx --outdir <JOBDIR>`，会一并产出 `source.txt` 文本。
+  (A local ffmpeg usually does not ship with a PDF decoder, hence PDF → pymupdf extraction rather than letting ffmpeg read the PDF directly.)
+- **With the `ppt-explain` skill installed**: `node <ppt-explain>/scripts/doc-to-pages.mjs --input x.pptx --outdir <JOBDIR>`, which also produces the `source.txt` text.
 
-## 5. 受限沙箱环境的坑（重要）
+## 5. Pitfalls in restricted sandbox environments (important)
 
-部分 Agent 运行时的沙箱**禁止 Node 直接 spawn 外部进程**（`spawnSync` / `execSync` 报 `EBUSY`，或静默无输出）。本技能的应对：
+Some Agent runtimes sandbox **Node so it cannot spawn external processes directly** (`spawnSync` / `execSync` reports `EBUSY`, or produces no output silently). This is how the skill works around it:
 
-- 凡是调 `ffmpeg` / `python3` / `ffprobe`，**一律用 shell 直接跑**，不要塞进 Node 脚本里执行。
-- Node 脚本（`gen_ass.mjs` / `gen_final.mjs` / `gen_srt.mjs`）只做「读文件 → 拼命令字符串 → 写文件」，产出的 `.sh` 再交给 shell 执行。
-- 删文件用 Node `fs.unlinkSync`（某些环境下 `Remove-Item` 不可靠）。
-- 单次渲染/拼接超过 2 分钟的任务挂后台跑，避免被前台超时掐断。
+- Whenever you invoke `ffmpeg` / `python3` / `ffprobe`, **always run it directly from the shell** — do not run it from inside a Node script.
+- The Node scripts (`gen_ass.mjs` / `gen_final.mjs` / `gen_srt.mjs`) only "read files → assemble a command string → write a file"; the `.sh` they produce is then handed to the shell to execute.
+- Delete files with Node's `fs.unlinkSync` (`Remove-Item` is unreliable in some environments).
+- Run any single render/concat task that takes more than 2 minutes in the background, so it does not get cut off by a foreground timeout.

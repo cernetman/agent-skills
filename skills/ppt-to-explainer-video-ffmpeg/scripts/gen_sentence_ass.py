@@ -1,19 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""配音 + 逐句/滚动字幕一次性生成(合并旧流程第 3、4 步)。
+"""Narration + sentence-level/scrolling subtitles generated in one go (merges steps 3 and 4 of the old pipeline).
 
-为什么合并成一步:
-  旧流程是"先跑一遍 edge-tts 出 mp3,再跑一遍拿边界",要调两次 TTS。
-  这里一次流里既写 mp3 又收集 SentenceBoundary 边界,天然一致;
-  并把边界落成 bounds_cache.json,后面改字幕版(静态/滚动)不用重新配音。
+Why merge them into one step:
+  The old pipeline ran edge-tts once to produce mp3 files, then ran it again just to get the boundaries: two TTS passes.
+  Here a single stream both writes the mp3 and collects the SentenceBoundary events, so the two are consistent by construction;
+  the boundaries are also saved to bounds_cache.json, so switching subtitle versions (static/scrolling) later needs no re-synthesis.
 
-⚠️ 关键事实(踩过):
-  - edge-tts 7.x 的事件名是 **SentenceBoundary**,不是 WordBoundary。
-    写 `chunk["type"] == "WordBoundary"` 永远匹配不到,会静默得到 0 条边界。
-  - offset / duration 单位是 100ns,秒 = ÷10_000_000。
-  - 首句 offset 通常从 1_000_000(0.1s)开始,所以逐句起点统一减 0.1s 更贴合听感。
+⚠️ Key facts (learned the hard way):
+  - In edge-tts 7.x the event name is **SentenceBoundary**, not WordBoundary.
+    Writing `chunk["type"] == "WordBoundary"` never matches anything and silently yields 0 boundaries.
+  - offset / duration are in 100ns units, so seconds = ÷10_000_000.
+  - The first sentence's offset usually starts at 1_000_000 (0.1s), so subtracting 0.1s from every sentence start lines up better with what you hear.
 
-用法:
+Usage:
   python gen_sentence_ass.py --job . --in vo3 --out mp3 --bounds bounds_cache.json \
       --voice zh-CN-XiaoxiaoNeural --rate +11% --mode scroll --size 60
 """
@@ -55,12 +55,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def tss(s):
-    """秒 -> ASS 时间戳 "H:MM:SS.cc"。
+    """seconds -> ASS timestamp "H:MM:SS.cc".
 
-    ⚠️ ASS 的小数部分是【厘秒】(固定 2 位),不是毫秒。若把毫秒余数(0~999)直接用 %02d 打出去,
-    值 >= 100 时会写出 3 位(如 .100),libass 按厘秒解析 -> 整个小数部分放大 10 倍
-    (0.1s 被读成 1.0s,0.999s 被读成 9.99s),字幕整轨错位且不报错。
-    实测:声明 0:00:00.100 开始的事件,画面到 1.0s 才出现字幕。
+    ⚠️ The fractional part of an ASS timestamp is [centiseconds] (always 2 digits), not milliseconds. If you print the millisecond remainder
+    (0~999) directly with %02d, any value >= 100 writes 3 digits (e.g. .100); libass parses it as centiseconds -> the whole fractional part is
+    scaled 10x (0.1s is read as 1.0s, 0.999s as 9.99s), the entire subtitle track drifts and nothing is reported.
+    Measured: an event declared to start at 0:00:00.100 only shows its subtitle on screen at 1.0s.
     """
     cs = max(0, int(round(s * 100)))
     h, r = divmod(cs, 360000)
@@ -70,11 +70,11 @@ def tss(s):
 
 
 def esc(s):
-    """转义 ASS 文本;换行必须【先按行 esc,再用字面的 \\N 连接】。
+    """Escape ASS text; newlines must [be escaped line by line first, then joined with a literal \\N].
 
-    顺序不能反:先拼 \\N 再整体 esc 会变成字面反斜杠 + 字母 N。
-    直接把裸换行拼进 Dialogue 行,第二行会缺 "Dialogue:" 头 -> libass 解析失败,
-    **整条字幕消失而且不报错**(见 SKILL.md 踩坑 1)。
+    The order cannot be reversed: joining \\N first and then escaping the whole thing turns it into a literal backslash + the letter N.
+    Splicing a bare newline straight into the Dialogue line leaves the second line without its "Dialogue:" header -> libass fails to parse it,
+    **the entire subtitle disappears and no error is raised** (see SKILL.md pitfall 1).
     """
     return "\\N".join(
         ln.replace("\\", "\\\\").replace(",", "\\,").replace("{", "\\{").replace("}", "\\}")
@@ -83,9 +83,9 @@ def esc(s):
 
 
 def cache_get(cache, tag):
-    """bounds_cache.json 的键可能是 "1" 也可能是 "01"(不同写法喂进来的)。
-    直接 cache.get("01") 会静默取不到 -> 前 9 页(01~09)整页漏写字幕。
-    两种写法都探一次。"""
+    """bounds_cache.json keys may be "1" or "01" (written by different callers).
+    A plain cache.get("01") silently misses them -> pages 01~09 lose their subtitles entirely.
+    Probe both spellings."""
     if not cache:
         return []
     v = cache.get(tag)
@@ -95,12 +95,12 @@ def cache_get(cache, tag):
 
 
 def text_width(txt, size):
-    """文本像素宽(滚动字幕算滚动时长要用)"""
+    """Text width in pixels (needed to compute the scrolling subtitle's duration)"""
     try:
         from PIL import ImageFont
         return ImageFont.truetype(FONT, size).getlength(txt)
     except Exception:
-        return len(txt) * size  # 退化估算:中文字宽≈字号
+        return len(txt) * size  # fallback estimate: CJK glyph width ≈ font size
 
 
 async def synth_page(text, voice, rate, mp3_path, tag):
@@ -113,17 +113,17 @@ async def synth_page(text, voice, rate, mp3_path, tag):
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
             elif chunk["type"] == "SentenceBoundary":
-                # 7.x 是 SentenceBoundary;写成 WordBoundary 会静默 0 条
+                # 7.x emits SentenceBoundary; writing WordBoundary silently gives 0 events
                 bounds.append([chunk["text"], chunk["offset"], chunk["duration"]])
     if not bounds:
-        print("[警告] %s 没拿到 SentenceBoundary,该页只会生成整页一条字幕" % tag)
+        print("[WARNING] got no SentenceBoundary for %s; this page will only get one full-page subtitle" % tag)
     return bounds
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", default=".")
-    ap.add_argument("--in", dest="indir", default="vo3", help="逐页文案目录 NN.txt")
+    ap.add_argument("--in", dest="indir", default="vo3", help="per-page script directory (NN.txt)")
     ap.add_argument("--out", dest="outdir", default="mp3")
     ap.add_argument("--assdir", default="ass")
     ap.add_argument("--bounds", default="bounds_cache.json")
@@ -134,7 +134,7 @@ def main():
     ap.add_argument("--y", type=int, default=900)
     ap.add_argument("--w", type=int, default=1920)
     ap.add_argument("--h", type=int, default=1080)
-    ap.add_argument("--force", action="store_true", help="已有 mp3 也重新配音")
+    ap.add_argument("--force", action="store_true", help="re-synthesize even if the mp3 already exists")
     a = ap.parse_args()
 
     job = os.path.abspath(a.job)
@@ -145,7 +145,7 @@ def main():
 
     pages = sorted(f for f in os.listdir(ind) if f.endswith(".txt"))
     if not pages:
-        raise SystemExit("[错误] %s 里没找到 NN.txt,先写好逐页旁白" % ind)
+        raise SystemExit("[ERROR] no NN.txt found in %s, write the per-page narration first" % ind)
 
     cache = {}
     if os.path.exists(os.path.join(job, a.bounds)):
@@ -165,12 +165,12 @@ def main():
             continue
         cache[tag] = asyncio.run(synth_page(txt, a.voice, a.rate, mp3p, tag))
         n_syn += 1
-        print("[配音] %s ok 句数=%d" % (tag, len(cache[tag])), flush=True)
+        print("[TTS] %s ok sentences=%d" % (tag, len(cache[tag])), flush=True)
 
     json.dump(cache, open(os.path.join(job, a.bounds), "w", encoding="utf-8"),
               ensure_ascii=False)
 
-    # 生成逐页 ass(static:逐句;scroll:整页一条 + \move)
+    # Generate the per-page ass (static: sentence by sentence; scroll: one event for the page + \move)
     ws = 2 if a.mode == "scroll" else 0
     n_ass = 0
     for f in pages:
@@ -180,8 +180,8 @@ def main():
             continue
         head = HEAD.format(w=a.w, h=a.h, ws=ws, font="SimHei", size=a.size, y=a.y)
         if a.mode == "scroll":
-            # 滚动字幕要整页文案一起滚(旧版就是这么出的片);
-            # 只取 ev[0][0] 会变成只滚第一句 —— 实测踩过。
+            # Scrolling subtitles must scroll the whole page's script together (that is how the old version produced films);
+            # taking only ev[0][0] scrolls just the first sentence — measured the hard way.
             body = open(os.path.join(ind, tag + ".txt"), encoding="utf-8").read().strip()
             if not body and ev:
                 body = "".join(x[0] for x in ev)
@@ -203,7 +203,7 @@ def main():
         open(os.path.join(assd, tag + ".ass"), "w", encoding="utf-8").write(head + "\n".join(lines) + "\n")
         n_ass += 1
 
-    print("新配音 %d 页 / 写出 %d 页 ass (mode=%s, size=%d, 缓存=%s)"
+    print("newly synthesized %d pages / wrote ass for %d pages (mode=%s, size=%d, cache=%s)"
           % (n_syn, n_ass, a.mode, a.size, a.bounds))
 
 
