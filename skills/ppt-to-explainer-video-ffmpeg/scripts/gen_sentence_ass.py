@@ -55,15 +55,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def tss(s):
-    ms = max(0, int(round(s * 1000)))
-    h, r = divmod(ms, 3600000)
-    m, r = divmod(r, 60000)
-    sec, cs = divmod(r, 1000)
-    return "%d:%02d:%02d.%02d" % (h, m, sec, cs)
+    """秒 -> ASS 时间戳 "H:MM:SS.cc"。
+
+    ⚠️ ASS 的小数部分是【厘秒】(固定 2 位),不是毫秒。若把毫秒余数(0~999)直接用 %02d 打出去,
+    值 >= 100 时会写出 3 位(如 .100),libass 按厘秒解析 -> 整个小数部分放大 10 倍
+    (0.1s 被读成 1.0s,0.999s 被读成 9.99s),字幕整轨错位且不报错。
+    实测:声明 0:00:00.100 开始的事件,画面到 1.0s 才出现字幕。
+    """
+    cs = max(0, int(round(s * 100)))
+    h, r = divmod(cs, 360000)
+    m, r = divmod(r, 6000)
+    sec, c = divmod(r, 100)
+    return "%d:%02d:%02d.%02d" % (h, m, sec, c)
 
 
 def esc(s):
-    return s.replace("\\", "\\\\").replace(",", "\\,").replace("{", "\\{").replace("}", "\\}")
+    """转义 ASS 文本;换行必须【先按行 esc,再用字面的 \\N 连接】。
+
+    顺序不能反:先拼 \\N 再整体 esc 会变成字面反斜杠 + 字母 N。
+    直接把裸换行拼进 Dialogue 行,第二行会缺 "Dialogue:" 头 -> libass 解析失败,
+    **整条字幕消失而且不报错**(见 SKILL.md 踩坑 1)。
+    """
+    return "\\N".join(
+        ln.replace("\\", "\\\\").replace(",", "\\,").replace("{", "\\{").replace("}", "\\}")
+        for ln in s.splitlines()
+    )
 
 
 def cache_get(cache, tag):

@@ -174,9 +174,10 @@ ffmpeg -y -ss 10.5 -t 8 -i 成片.mp4 \
 
 ### 这个技能的"资产"其实是踩坑清单
 
-脚本本身不难写，难的是那些**不报错但结果错**的坑。SKILL.md 里固化了 16 条实测踩坑，例如：
+脚本本身不难写，难的是那些**不报错但结果错**的坑。SKILL.md 里固化了 18 条实测踩坑，例如：
 
-- **字幕逐页累积偏移**：硬切成片漏传 `--t 0`，字幕每页早 0.5s —— 3 页早 1.0s、**50 页到末页早 24.5s**，全程零报错。这条是本仓库做端到端验证时抓到并修掉的。
+- **ASS 时间戳把毫秒写进了厘秒字段**：小数部分被 libass 放大 10 倍，声明 0.1s 开始的事件到 1.0s 才出现字幕，`0~9s` 误差随条目跳动且零报错。这条是本仓库做端到端验证时抓到并修掉的。
+- **字幕逐页累积偏移**：硬切成片漏传 `--t 0`，字幕每页早 0.5s —— 3 页早 1.0s、**50 页到末页早 24.5s**，全程零报错。
 - **前 9 页整页漏写字幕**：语音边界缓存的键名可能是 `"1"` 也可能是 `"01"`，`cache.get("01")` 静默取空。
 - **多行文案导致整页字幕消失还报成功**：ASS 必须**先转义再拼 `\N`**；顺序反了会变成字面反斜杠+字母 N。
 - **edge-tts 7.x 事件名是 `SentenceBoundary` 不是 `WordBoundary`**，写错永远抓不到、静默 0 条。
@@ -184,7 +185,7 @@ ffmpeg -y -ss 10.5 -t 8 -i 成片.mp4 \
 - **concat `-c copy` 的片头必须带实长静音音轨**，否则片头被截短还不报错。
 - **concat list 的相对路径以 list 文件所在目录为基准**，放错目录就 `Invalid argument`。
 
-全部 16 条 + 每条的现象/原因/修法见 [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#踩坑清单按踩的时间顺序)。
+全部 18 条 + 每条的现象/原因/修法见 [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#踩坑清单按踩的时间顺序)。
 
 ### 已知边界
 
@@ -265,7 +266,7 @@ Output size dropped from 119.5 MB to 47.9 MB. Because `master.mp4` has no subtit
 
 **Install:** copy `skills/ppt-to-explainer-video-ffmpeg/` into your agent runtime's skills directory (e.g. `~/.claude/skills/`).
 
-The real value of this skill is its **16 documented pitfalls** — bugs that produce wrong output *without* raising an error (cumulative subtitle drift from a mismatched `--t`, subtitle-key mismatches, ASS escaping order, `zoompan` swallowing `-t`, silent audio in concat, …). See [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md).
+The real value of this skill is its **18 documented pitfalls** — bugs that produce wrong output *without* raising an error (ASS timestamps inflated 10× by writing milliseconds into the centisecond field, cumulative subtitle drift from a mismatched `--t`, subtitle-key mismatches, ASS escaping order, `zoompan` swallowing `-t`, silent audio in concat, …). See [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md).
 
 ### License
 
