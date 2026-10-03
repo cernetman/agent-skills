@@ -87,6 +87,10 @@ Turn a PPT/PDF into a page-by-page explainer video with AI narration and burned-
 | **滚动跑马灯** | `\q2` + `WrapStyle: 2` + `\move`，与语音逐句同步 | 要"字幕随语音走完"的演示片 |
 | **竖屏补硬字幕** | SimHei 62px、Alignment=2、MarginV≈240 | 1080×1920 分镜自带底部字幕条 |
 
+![两种字幕形态对比：左为滚动跑马灯，右为静态逐句](assets/subtitle-modes.gif)
+
+> ↑ 同一页、同一份配音，只换字幕形态（左：滚动跑马灯；右：静态逐句）。用 `gen_film_ass.py --mode` 一行切换，**换形态不必重新配音、不必重渲段**。
+
 ⚠️ `\q1` **不是**不换行——libass 对无空格中文长句仍会按屏宽折行。滚动字幕必须 `\q2` + 头部 `WrapStyle: 2` **双保险**。
 
 ### 快速开始
