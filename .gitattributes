@@ -1,0 +1,13 @@
+# 统一换行符：仓库内一律 LF，Windows 专用脚本除外
+# 这样在 Windows 上 clone 出来的 .mjs/.py 也能在 Linux/macOS 正常运行
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary
+*.mp4 binary
+*.ico binary
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf

@@ -1,0 +1,27 @@
+name: validate-skills
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 校验 SKILL.md frontmatter
+        run: node tools/validate-skills.mjs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 打包冒烟测试（含泄露检查）
+        run: python tools/pack_skill.py --skill ppt-to-explainer-video-ffmpeg --out dist --leak-check
