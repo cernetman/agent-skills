@@ -105,6 +105,12 @@ cp -r agent-skills/skills/ppt-to-explainer-video-ffmpeg ~/.cursor/skills/
 # Any other runtime that supports Agent Skills: copy the skill directory into its skills directory
 ```
 
+**Or download the packaged build** — for runtimes that take an uploaded skill archive rather than a clone:
+
+[`releases/ppt-to-explainer-video-ffmpeg-2.0.0.zip`](releases/ppt-to-explainer-video-ffmpeg-2.0.0.zip) (55.9 KB, with `SKILL.md` at the top level, the layout those platforms expect).
+
+> ⚠️ That archive is the package exactly as published to the marketplace: its `SKILL.md` and comments are in Chinese, and it predates the fixes listed under Unreleased in the changelog. The repository source (English, with the fixes) is the newer edition.
+
 **2. Install dependencies and run the preflight check**
 
 ```bash

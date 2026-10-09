@@ -1,6 +1,8 @@
 # ---- Packaging artifacts ----
 dist/
 *.zip
+# ...except the packaged builds we ship on purpose (releases/ is tracked)
+!releases/*.zip
 
 # ---- Render job artifacts (large, never committed) ----
 job/
