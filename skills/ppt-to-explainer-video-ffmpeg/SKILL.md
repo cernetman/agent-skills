@@ -1,8 +1,8 @@
 ---
 name: ppt-to-explainer-video-ffmpeg
-description: Turn a PPT/PDF/document into a page-by-page explainer video — slide image + presenter narration + burned-in subtitles + transitions. Narration is synthesized with edge-tts and the film is rendered by your local ffmpeg, with no online transcription service and no upload of your material. Supports both static per-sentence subtitles and a right-to-left rolling marquee, plus an optional title card and a freeze-frame on the last page. Use it when the user asks to "make this deck into a narrated video", "an explainer video with a voice-over", "a video of these slides with subtitles", or "record a voice-over for my courseware".
+description: Turn a PPT/PDF/document into a page-by-page explainer video — slide image + presenter narration + burned-in subtitles + transitions. Since v2.0.0 all input is normalized through PDF first (LibreOffice → PDF → page images), so the page layout can no longer drift. Narration is synthesized with edge-tts and the film is rendered by your local ffmpeg, with no online transcription service and no upload of your material. Supports both static per-sentence subtitles and a right-to-left rolling marquee, plus an optional title card and a freeze-frame on the last page. Use it when the user asks to "make this deck into a narrated video", "an explainer video with a voice-over", "a video of these slides with subtitles", or "record a voice-over for my courseware".
 license: MIT
-version: 1.1.0
+version: 2.0.0
 author: cernetman
 category: office
 ---
@@ -66,19 +66,71 @@ node "<SKILL_DIR>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes <estimated mi
 
 - **ffmpeg / ffprobe / CJK font are all auto-detected, with no machine paths hard-coded**: `precheck.mjs` searches `PATH → /usr/bin → /usr/local/bin → common install locations → ~/bin`, then on Windows `C:/Windows/Fonts/simhei.ttf`, on Linux WenQuanYi/Noto CJK, on macOS PingFang. **It runs on another machine unchanged**; override with `--ff` / `--font` / `--ffprobe` when needed.
 - **The Python interpreter is a trap**: the `python3` on `PATH` may be a version **without `edge_tts`** (a real case: 3.14.3 did not have it, 3.13.12 did). `precheck.mjs` tries `import edge_tts` against every candidate (`where python` plus each managed Python version) and tells you which one works; you can also pass `--py <python.exe>`.
-- **Page images**: **ffmpeg usually ships without a PDF decoder** → go via LibreOffice to PDF, then extract with pymupdf.
+- **New in v2.0.0 — steps 0 and 1 need two more dependencies**:
+  - **LibreOffice** (`soffice`): only needed when the source is a PPT/Word/spreadsheet. You can skip it entirely by saving a PDF yourself and starting at step 1. <https://www.libreoffice.org/download/>
+  - **pymupdf** (`pip install pymupdf`): required to rasterize the PDF. The current API is `import pymupdf`; older installs expose `import fitz`, and the script tries both.
+  - ⚠️ **`pymupdf` and `edge_tts` must be installed in the same interpreter**, or you get the half-broken state where step 0 produces a PDF and step 1 cannot read it. `precheck.mjs` reports which interpreter each one lives in.
+- **Page images come from the PDF, not from ffmpeg**: ffmpeg usually ships without a PDF decoder, which is why rasterizing is done by pymupdf.
 
-## The pipeline (7 steps)
+## Input chain: PPT → PDF → page images → video (mandatory since v2.0.0)
 
-### 1. Get page images and text
-
-Prefer reusing the `ppt-explain` expert script if it is installed:
-
-```bash
-node "<skills>/ppt-explain/scripts/doc-to-pages.mjs" --input "<file.pptx>" --outdir "<JOBDIR>"
+```
+<file.pptx>  ──[0] to_pdf.py (LibreOffice)──►  pdf/source.pdf
+                                                 │
+<file.pdf>  ─────────────────────────────────────┤  passes straight through, no conversion
+                                                 ▼
+                                            [1] pdf_to_pages.py (pymupdf)
+                                                 ▼
+                                        pages/NN.png + source.txt
+                                                 ▼
+                                        [2–7] narration / render / subtitles / assemble  ← unchanged
 ```
 
-That produces `01.png…NN.png` plus `source.txt`. If it is not available, fall back to: export from WPS/Office, or python-pptx + LibreOffice (extract 1920×1080 with pymupdf).
+**Why a PDF has to sit in the middle (this is the entire motivation for v2.0.0)**
+
+The old flow fed the deck straight into page extraction and relied on a library such as `python-pptx` to re-lay-out the page from the shape object model. Such libraries read coordinates only: they do not substitute fonts, do not re-wrap lines, and do not correct line heights. The moment a text box is smaller than its text, a font is missing, or a master placeholder goes unrendered, the extracted image no longer matches what PowerPoint shows — the symptoms are **shifted layout, text on top of graphics, misplaced elements**.
+
+Once the deck is a PDF, LibreOffice's full layout engine fixes the layout **once and for all** (a PDF records absolute coordinates), and step 1 only rasterizes each page. There is **no re-layout step left**, so the drift disappears at the root.
+
+**The cost**: one extra conversion (a 50-page deck measured 25–40 s on the Windows test machine). What you get back is page images whose aspect ratio is identical across the whole deck (measured 1921×1080 for all 50), so the `scale`+`pad` in `render_all.py` no longer produces black bars.
+
+### Supported inputs
+
+| Input | What step 0 does |
+|---|---|
+| `.pptx / .ppt` | LibreOffice converts to PDF (Impress engine) |
+| `.docx / .doc / .rtf / .odp` | LibreOffice converts to PDF |
+| `.pdf` | **Passes straight through**: registered as-is, LibreOffice is never touched |
+| `.xlsx / .xls` | LibreOffice converts to PDF (one page per sheet; use with care) |
+
+## The pipeline (8 steps: 0 transcode → 7 verify)
+
+### 0. Convert to PDF (new in v2.0.0; required for PPT/Word)
+
+```bash
+"<your python.exe>" "<SKILL>/scripts/to_pdf.py" --input "<file.pptx>" --job .
+```
+
+- Produces `pdf/source.pdf`, plus `pdf/source.json` recording the origin, the page count and the elapsed time, so you can later trace which file and which page an image came from.
+- **Idempotent**: it skips when the output is not older than the source, and re-converts automatically once the deck changes. `--force` overrides that.
+- **It never papers over a failure**: soffice not found, a non-zero exit, exit 0 with no output, a timeout, or a zero-page result — each is reported with the next action to take, and **no half-finished artifact is ever produced**. This step is the foundation of the pipeline: no PDF, no video. Do not try to skip it.
+- A job that already has its PDF does **not** need LibreOffice installed; go straight to step 1.
+- Failure codes and troubleshooting are in "Step 0 failure handling" below.
+
+### 1. PDF → page images + text
+
+```bash
+"<your python.exe>" "<SKILL>/scripts/pdf_to_pages.py" --job . --outdir pages
+```
+
+- The input is **the PDF only** (since v2.0.0 the source of page images is pinned down, and that is what eliminates the drift).
+- Produces `01.png…NN.png` + `source.txt` (the per-page text, handy while writing narration) + `pdf/pages_meta.json` (per-page dimensions).
+- Default 144 dpi ≈ 1920×1080; `--scale-to 1920` forces the long edge, and `--min-dpi` protects very small pages.
+- **Aspect-ratio check**: the script measures the aspect ratio of every page and, when several ratios are mixed, **warns without blocking** (a source deck may legitimately mix them) — but it names exactly which pages differ.
+- ⚠️ ffmpeg usually ships without a PDF decoder, which is why this step uses pymupdf instead.
+
+> **Do not fall back to extracting page images straight from the PPT with python-pptx** — that is precisely the drift v2.0.0 exists to eliminate.
+> The `ppt-explain/scripts/doc-to-pages.mjs` that older documentation referenced is **deprecated**: that skill was not installed here, so every run improvised a different workaround, and the resulting page images disagreed in size and ratio. v2.0.0 replaces it with `pdf_to_pages.py` from this repository.
 
 ### 2. Write the narration (one `vo3/NN.txt` per page)
 
@@ -177,7 +229,9 @@ Finally: copy the film and the srt to the user's desktop and present them.
 
 | Script | Language | Purpose | Main parameters |
 |---|---|---|---|
-| `precheck.mjs` | node | Preflight environment check (ffmpeg/ffprobe/font/edge_tts/page images/disk budget) | `--job --ff --font --py --minutes` |
+| `precheck.mjs` | node | Preflight environment check (ffmpeg/ffprobe/font/edge_tts/pymupdf/LibreOffice/PDF/page images/disk budget) | `--job --ff --font --py --pdf --soffice --minutes` |
+| `to_pdf.py` | py | **v2.0.0** — step 0: normalize PPT/Word/spreadsheet to PDF via LibreOffice headless | `--input --job --force --clean --timeout --soffice` |
+| `pdf_to_pages.py` | py | **v2.0.0** — step 1: rasterize the PDF into `pages/NN.png` + `source.txt` with pymupdf | `--job --outdir --scale-to --min-dpi --pages` |
 | `gen_sentence_ass.py` | py | Voice-over + per-sentence/rolling subtitles (merges the old steps 3 and 4) | `--in --out --assdir --bounds --mode --voice --rate --size --y --force` |
 | `render_all.py` | py | Parallel segment rendering + duration table export | `--seg --rows --durations-out --j --no-sub --burn-sub --crf --preset --tail-freeze` |
 | `gen_film_ass.py` | py | Whole-film ASS (absolute timeline, supports scroll/static) | `--durations --bounds --txt-dir --out --mode --size --y --w --h --intro --t` |
@@ -243,8 +297,35 @@ Finally: copy the film and the srt to the user's desktop and present them.
 17. **The fractional part of an ASS timestamp is centiseconds, not milliseconds** (the most severe bug in this project: it misaligns the whole subtitle track). `tss()` printed the millisecond remainder (0–999) with `%02d`, which emits three digits once the value reaches 100: `.100` / `.500` / `.999`. libass parses the fraction as centiseconds → the **fraction is inflated 10×**: an event declared to start at `0:00:00.100` only appeared on screen at **1.0 s**, and `.999` was off by 9 s. The error jitters with each timestamp's millisecond digits (0–9 s) and **nothing ever reports an error**. How to detect it: render the ASS alone over a black background, position it at an exact time with `setpts=PTS+T/TB` and count white pixels — if a declared `0.100` only appears at 1.0 s, you have it. Fix: compute centiseconds and always print two digits — `cs = round(s*100)` followed by `"%d:%02d:%02d.%02d"`.
 18. **The rolling and static modes need separate ASS headers**; sharing one trips two bugs at once. Static subtitles stop wrapping (`WrapStyle: 2` is the rolling mode's "do not auto-wrap") and run off the right edge; and hard-coding `PlayResX/PlayResY` in the header renders `--w/--h` inert (portrait arguments silently do nothing). Correct: rolling uses `WrapStyle 2` + `Alignment 7` + `MarginV y`; static uses `WrapStyle 0` + `Alignment 2` + `MarginV h−y`.
 
+19. **A UTF-8 BOM in the narration files leaks into the audio and the subtitles**: read `vo3/NN.txt` with `utf-8-sig`, not plain `utf-8`. `str.strip()` does not remove U+FEFF, so an invisible character becomes the first character of every subtitle built from a page file — and Notepad and several Windows editors write that BOM by default.
+20. **Extracting page images straight from a PPT always drifts** (the root cause of the v2.0.0 upgrade): `python-pptx` reads shape coordinates only — it does not substitute fonts, re-wrap lines or correct line heights, so the moment a text box is smaller than its text or a font is missing, the layout stops matching PowerPoint. **Convert to PDF first** and let the layout engine fix the absolute coordinates once.
+21. **On Windows, calling `soffice.exe` returns "exit 0" before the file exists**: `soffice.exe` is the GUI launcher and returns immediately; `soffice.com` is the console build that blocks until the conversion has finished. `to_pdf.py` probes `soffice.com` before `soffice.exe` — **do not change it back to `soffice.exe` only**. LibreOffice also writes asynchronously, so the script additionally waits until the file size has been stable for 1.2 s.
+22. **LibreOffice fights with an instance the user already has open**: sharing one user profile makes it refuse the conversion outright (sometimes while still returning 0). `to_pdf.py` starts an isolated profile with `-env:UserInstallation=file:///<temp dir>` and **always deletes it afterwards** (it is large; leaving it behind dirties the project directory).
+23. **`soffice` reports "exit 0 with no output" for encrypted, protected or corrupt documents**: no error, and no PDF either. `to_pdf.py` detects that case specifically and offers three concrete ways out instead of letting it slide by.
+24. **`pymupdf` and `edge_tts` must live in the same interpreter**: installing them into two different Pythons produces the broken chain where step 0 succeeds and step 1 dies with `ModuleNotFoundError`. `precheck.mjs` reports which interpreter each one is in.
+25. **The intermediate PDF is kept by default**: `pdf/source.pdf` stays, so you can re-extract pages, check the page count and trace the origin; remove it with `to_pdf.py --clean` once you are satisfied. **The LibreOffice temporary profile, by contrast, must always be deleted** — do not confuse the two.
+
+## Step 0 failure handling (PPT → PDF)
+
+`to_pdf.py` reports five classes of failure separately and **never falls back to "extract the PPT directly"** (that would invite the drift straight back):
+
+| Symptom | What the script does | What you do |
+|---|---|---|
+| soffice not found | Lists the paths it probed, plus the download link | Install LibreOffice; or save a PDF yourself and pass `--input x.pdf`; or point at it with `--soffice <full path>` |
+| soffice exits non-zero | Prints the last 600 characters of stderr | Act on the error; the usual cause is the file being locked by an open Office/WPS window |
+| Exit 0 but no PDF | Says outright that the conversion did not succeed | The document is probably encrypted, protected or corrupt — save a fresh copy |
+| Timeout (300 s by default) | Kills the process and reports it | For a large deck with many images, raise it with `--timeout 600` |
+| Zero pages produced | **Deletes the artifact** and reports the failure | An empty PDF would silently produce a zero-segment empty video, so it has to be stopped here |
+
+## Version history
+
+| Version | Date | Changes |
+|---|---|---|
+| **2.0.0** | 2026-10-07 | **Major upgrade (pipeline restructure).** ① New step 0 `to_pdf.py`: PPT/Word → PDF via LibreOffice headless, so layout is fixed in the PDF and **page drift is eliminated at the root**; ② new step 1 `pdf_to_pages.py`: PDF → page images, replacing the `ppt-explain/doc-to-pages.mjs` that was never installed, with the input pinned to PDF; ③ `precheck.mjs` gained four checks (soffice / pymupdf / source PDF / page images), nine in total; ④ the pipeline grew from 7 to 8 steps, while steps 2–7 (narration → voice-over → render → subtitles → assemble → verify) keep their logic and parameters **completely unchanged** — verified by running the downstream six scripts unmodified against a real 50-page deck. |
+| 1.1.0 | 2026-10-02 | Three-stage architecture (segment render → `-c copy` hard cut → single subtitle burn), 128 s → 78–93 s on 50 pages; path parameters completed and missing-file errors turned into readable messages. |
+
 ## Final words
 
-The asset here is the 18 pitfalls above plus the three-stage architecture, not the scripts themselves. Run `precheck.mjs` before touching any script — most "it won't run" cases are environment problems, not pipeline problems.
+The asset here is the 25 pitfalls above, the three-stage architecture and the PPT → PDF → video input chain, not the scripts themselves. Run `precheck.mjs` before touching any script — most "it won't run" cases are environment problems, not pipeline problems.
 
-Environment installation (ffmpeg / edge-tts / CJK fonts) is covered in `references/setup.md`; version history lives in `CHANGELOG.md` at the repository root.
+Environment installation (ffmpeg / edge-tts / CJK fonts / LibreOffice / pymupdf) is covered in `references/setup.md`; the version history is in the table above and in `CHANGELOG.md` at the repository root.

@@ -51,24 +51,37 @@ The manual installation steps below are for when you would rather skip the prefl
 
 > **Multiple interpreters are a common pitfall**: the `python3` on your PATH may be exactly the one without `edge_tts` installed. Let `precheck.mjs` pick one, or point directly at one with `--py <python.exe>`.
 
+## 2b. LibreOffice and pymupdf (new in v2.0.0, for steps 0 and 1)
+
+- **pymupdf** — required by step 1 (`pdf_to_pages.py`) to rasterize the PDF: `pip install pymupdf`. The current API is `import pymupdf`; older installs expose `import fitz`, and the script tries both.
+  ⚠️ Install it into the **same interpreter** as `edge_tts`, or you end up in the half-broken state where step 0 produces a PDF and step 1 cannot read it. `precheck.mjs` reports which interpreter each one lives in.
+- **LibreOffice** (`soffice`) — needed by step 0 (`to_pdf.py`) only when the source is a PPT/Word/spreadsheet: <https://www.libreoffice.org/download/>
+  - If you cannot install it, save the deck as a PDF yourself (PowerPoint / WPS / any LibreOffice install elsewhere) and start at step 1 with `--input <file.pdf>`.
+  - On Windows, `to_pdf.py` prefers `soffice.com` — the console build that blocks until the conversion has finished — over `soffice.exe`, the GUI launcher that returns before the file exists. It also starts an isolated profile via `-env:UserInstallation=...` so it does not fight a LibreOffice instance you already have open.
+
 ## 3. Chinese font (subtitle rendering)
 
 - **Windows**: ships with `SimHei` (Hei), so no extra installation is needed and the scripts use it by default.
 - **Linux**: install `fonts-noto-cjk` or `wqy-zenhei`, and pass `--font "Noto Sans CJK SC"` to the script (or change `Fontname` in the ASS style line as well).
 - **macOS**: `PingFang SC`, or install `Noto Sans CJK SC`.
 
-## 4. Where the page images come from (the first input of the pipeline)
+## 4. Where the page images come from (steps 0 and 1)
 
-The skill takes `01.png … NN.png` as the picture for each page; pick any one of the three export routes:
+Since v2.0.0 the source of page images is pinned to the PDF, and that is what stops the layout from drifting:
 
-- **PowerPoint / WPS**: File → Export → Images (PNG), naming them in order.
-- **LibreOffice** (when Office is not installed):
-  ```bash
-  soffice --headless --convert-to pdf x.pptx
-  python -c "import fitz,sys; d=fitz.open('x.pdf'); [p.get_pixmap(matrix=fitz.Matrix(2,2)).save(f'{i+1:02d}.png') for i,p in enumerate(d)]"
-  ```
-  (A local ffmpeg usually does not ship with a PDF decoder, hence PDF → pymupdf extraction rather than letting ffmpeg read the PDF directly.)
-- **With the `ppt-explain` skill installed**: `node <ppt-explain>/scripts/doc-to-pages.mjs --input x.pptx --outdir <JOBDIR>`, which also produces the `source.txt` text.
+```bash
+# step 0 — only for PPT/Word/spreadsheet input; a PDF passes straight through
+python "<SKILL>/scripts/to_pdf.py" --input "<deck.pptx>" --job .
+
+# step 1 — PDF → pages/01.png … NN.png, plus source.txt for reference while writing narration
+python "<SKILL>/scripts/pdf_to_pages.py" --job . --outdir pages
+```
+
+- Default 144 dpi ≈ 1920×1080; `--scale-to 1920` forces the long edge, and `--min-dpi` protects very small pages.
+- Step 1 also writes `pdf/pages_meta.json` (per-page dimensions) and measures the aspect ratio of every page, warning when several ratios are mixed.
+- Rather not install LibreOffice? Export the PDF by hand (PowerPoint/WPS: File → Export → PDF) and run step 1 only.
+
+> **Do not extract page images straight from the PPT with python-pptx.** That route re-lays-out the page from the shape object model, which does not substitute fonts, re-wrap lines or correct line heights — the symptoms are shifted layout and text sitting on top of graphics. It is exactly what v2.0.0 removed.
 
 ## 5. Pitfalls in restricted sandbox environments (important)
 

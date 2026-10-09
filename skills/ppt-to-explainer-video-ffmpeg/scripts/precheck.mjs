@@ -5,7 +5,15 @@
 //     Copying `python3 -m edge_tts` gives you an immediate ModuleNotFoundError.
 //   - ffmpeg / ffprobe are hard dependencies of this skill; missing either one breaks the whole pipeline.
 //
-// Usage: node precheck.mjs [--job .] [--py <path to python.exe>]
+// 2026-10-07 Added in v2.0.0 (the PPT -> PDF stage brings a batch of new dependencies):
+//   - pymupdf: step 1's PDF page-image extraction depends on it (the old flow used python-pptx, no longer needed).
+//   - LibreOffice (soffice): step 0's PPT/Word -> PDF depends on it.
+//     **It has to be judged inside the same interpreter environment as edge_tts / pymupdf**, otherwise you get
+//     "step 0 produced the PDF, but step 1 can't extract the pages" — a broken chain halfway through.
+//   - source PDF / page images are reported as two separate rows: PDF but no page images = stuck at step 1,
+//     neither = stuck at step 0.
+//
+// Usage: node precheck.mjs [--job .] [--py <path to python.exe>] [--pdf pdf/source.pdf] [--soffice <path>]
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -71,10 +79,56 @@ ok("edge_tts", !!hit, hit || "none of the candidate python installs has edge_tts
   hit ? "" : "use the python that has the package installed: " +
   `<your python>/pip install edge-tts — note that the python3 on PATH is not necessarily that one,` +
   "so prefer calling it by absolute path everywhere");
-// 5) page images
+// 4b) [added in v2.0.0] pymupdf — page-image extraction from PDF depends on it (step 1, pdf_to_pages.py)
+let pmHit = "";
+for (const p of [...new Set(pys)]) {
+  if (!existsSync(p)) continue;
+  try {
+    // the new API is pymupdf, older versions are fitz — probe both
+    execFileSync(p, ["-c", "import pymupdf"], { encoding: "utf8", stdio: "ignore" });
+    pmHit = p;
+    break;
+  } catch {
+    try {
+      execFileSync(p, ["-c", "import fitz"], { encoding: "utf8", stdio: "ignore" });
+      pmHit = p + " (fitz legacy API)";
+      break;
+    } catch {}
+  }
+}
+ok("pymupdf", !!pmHit, pmHit ? pmHit.replace(" (fitz legacy API)", "") : "no python with pymupdf installed was found",
+  pmHit ? "" : "page-image extraction from PDF depends on it: <your python>/pip install pymupdf" +
+  " (install it in the same interpreter as edge_tts, or step 0 will produce the PDF but step 1 won't be able to extract the pages)");
+// 4c) [added in v2.0.0] LibreOffice — only required when the source file is PPT/Word.
+//     A project that already has the PDF can do without it (go straight to step 1).
+const SOF = arg("soffice", firstOf([
+  "C:/Program Files/LibreOffice/program/soffice.com",
+  "C:/Program Files/LibreOffice/program/soffice.exe",
+  "C:/Program Files (x86)/LibreOffice/program/soffice.com",
+  "/usr/bin/soffice", "/usr/local/bin/soffice", "/snap/bin/libreoffice",
+  "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+]) || "");
+const sofResolved = SOF ? resolved(SOF) : "";
+const hasPdf = existsSync(join(JOB, arg("pdf", "pdf/source.pdf")));
+if (sofResolved || hasPdf) {
+  ok("LibreOffice", !!sofResolved, sofResolved || "(already have the PDF, not needed)",
+    sofResolved ? (hasPdf ? "" : "ready — just remember to run to_pdf.py before extracting page images")
+      : "");
+} else {
+  ok("LibreOffice", false, "no soffice found, and no pdf/source.pdf yet",
+    "PPT/Word has to go through to_pdf.py to become a PDF. Install LibreOffice: https://www.libreoffice.org/download/" +
+    " | or save as PDF by hand with Office/WPS, then --input \"<that.pdf>\" goes straight to step 1");
+}
+// 5) page images — upstream is now always a PDF, so report the intermediate artifact too
 const pagesDir = arg("pages", "pages");
+const pdfRel = arg("pdf", "pdf/source.pdf");
+const pdfP = join(JOB, pdfRel);
+const pdfOk = existsSync(pdfP);
 const pn = existsSync(join(JOB, pagesDir)) ? readdirSync(join(JOB, pagesDir)).filter((f) => /\.(png|jpg)$/i.test(f)).length : 0;
-ok("page images", pn > 0, join(JOB, pagesDir), pn ? `${pn} found` : "extract page images first (LibreOffice -> PDF + pymupdf)");
+ok("source PDF", pdfOk, pdfP, pdfOk ? "ready (step 0 output)" :
+  "not there yet — run first: python <skill>/scripts/to_pdf.py --input \"<source file>\" --job .");
+ok("page images", pn > 0, join(JOB, pagesDir), pn ? `${pn} found` :
+  "run pdf_to_pages.py first (PDF -> pages/NN.png); don't go back to pulling pages straight out of the PPT with python-pptx and friends — the frames come out off");
 // 6) disk budget (informational only, never fails the check)
 //    Node cannot read free space on Windows, so estimate it from the final bitrate instead:
 //    1080p 30fps crf20 is about 1.9 Mbps ≈ duration (seconds) × 0.22 MB

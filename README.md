@@ -29,7 +29,7 @@ These are not prompt templates. Each one freezes a **real, measured workflow** i
 
 | Skill | What it does | Version | Status |
 |---|---|---|---|
-| [`ppt-to-explainer-video-ffmpeg`](skills/ppt-to-explainer-video-ffmpeg/) | Turns a PPT/PDF into a page-by-page explainer video with AI narration and burned-in subtitles, using local ffmpeg | v1.1.0 | stable |
+| [`ppt-to-explainer-video-ffmpeg`](skills/ppt-to-explainer-video-ffmpeg/) | Turns a PPT/PDF into a page-by-page explainer video with AI narration and burned-in subtitles, using local ffmpeg. Since v2.0.0 all input is normalized through PDF first, so page layout cannot drift | v2.0.0 | stable |
 
 <!-- To add a skill: create skills/<name>/ and add a row here. CI validates the frontmatter. -->
 
@@ -119,7 +119,13 @@ node "<SKILL_DIR>/scripts/precheck.mjs" --job "<JOBDIR>" --minutes 4
 **3. Run the pipeline** (every step can be re-run on its own)
 
 ```bash
-# ① Page images 01.png…NN.png into JOBDIR, one narration file per page in vo3/NN.txt
+# ⓪ PPT/Word/spreadsheet → PDF (v2.0.0 step 0; a PDF input passes straight through)
+python "<SKILL>/scripts/to_pdf.py" --input "<deck.pptx>" --job .
+
+# ① PDF → page images 01.png…NN.png + per-page text source.txt (v2.0.0 step 1)
+python "<SKILL>/scripts/pdf_to_pages.py" --job . --outdir pages
+
+# then: one narration file per page in vo3/NN.txt
 
 # ② Voice-over + sentence-level subtitles (one TTS stream yields both the mp3 and the boundaries)
 python "<SKILL>/scripts/gen_sentence_ass.py" --job . --in vo3 --out mp3 \
@@ -152,6 +158,8 @@ Parameters, the timeline formula, fonts and aspect-ratio settings are all in [`S
 | **ffmpeg + ffprobe** | Required. Auto-detected on `PATH` and in common install locations; override with `--ff` / `--ffprobe` |
 | **Python 3.10+** | Required. Needs `pip install edge_tts` (free Microsoft neural voices, no API key) |
 | **A CJK font** | SimHei ships with Windows; `fonts-noto-cjk` on Linux; PingFang on macOS |
+| **LibreOffice** *(v2.0.0, optional)* | Only needed when the source is a PPT/Word/spreadsheet — step 0 converts it to PDF. Supply a PDF and it is never touched |
+| **pymupdf** *(v2.0.0)* | Step 1 rasterizes the PDF. `pip install pymupdf`, and it must live in the **same interpreter** as `edge_tts` |
 | **Network** | Only the TTS synthesis step needs it. Your material is never uploaded |
 
 Per-platform install commands are in [`references/setup.md`](skills/ppt-to-explainer-video-ffmpeg/references/setup.md).
@@ -177,7 +185,7 @@ The scripts are not hard to write. What is hard are the bugs that produce **wron
 - **Cumulative subtitle drift**: a hard-cut film that forgets `--t 0` shifts subtitles 0.5 s earlier per page — 1.0 s by page 3, **24.5 s by page 50**, silently.
 - **The first 9 pages lost their subtitles entirely**: the sentence-boundary cache may key pages as `"1"` or as `"01"`, and `cache.get("01")` returns nothing without complaining.
 
-All 18, each with symptom, cause and fix, are in [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#pitfalls-in-the-order-they-bit-us).
+All 25, each with symptom, cause and fix, are in [`SKILL.md`](skills/ppt-to-explainer-video-ffmpeg/SKILL.md#pitfalls-in-the-order-they-bit-us).
 
 ### Known limits
 
@@ -197,7 +205,7 @@ agent-skills/
 │       ├── SKILL.md          # The skill itself: triggers, pipeline, parameters, pitfalls
 │       ├── references/
 │       │   └── setup.md      # Per-platform environment setup
-│       └── scripts/          # 7 parameterized scripts (node + python)
+│       └── scripts/          # 9 parameterized scripts (node + python), incl. the PDF steps
 ├── tools/
 │   ├── validate-skills.mjs   # Validates every SKILL.md frontmatter block
 │   ├── check-links.py        # Checks relative links, anchors and frontmatter

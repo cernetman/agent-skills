@@ -33,6 +33,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `references/setup.md` now includes a real preflight output sample and explains that the `page images` item is **inevitably** ❌ before you start work, so it is not mistaken for an environment failure.
 - The pitfall list grew from 14 to 18 entries (adding the "centiseconds vs. milliseconds", "`--t` offset", "`durations.json`", and "shared header across both modes" items above).
 
+## [2.0.0] - 2026-10-07
+
+Skill: `ppt-to-explainer-video-ffmpeg`
+
+### Added
+
+- **Step 0, `to_pdf.py`**: normalizes PPT / Word / spreadsheet input to PDF through LibreOffice headless, so the layout is fixed once, inside the PDF. It is idempotent (re-converting when the source is newer) and it refuses to paper over a failure — soffice missing, a non-zero exit, exit 0 with no output, a timeout, or a zero-page result are each reported with the next action, and no half-finished artifact is ever produced. A job that already has its PDF never touches LibreOffice.
+- **Step 1, `pdf_to_pages.py`**: rasterizes the PDF into `pages/NN.png` + `source.txt` with pymupdf and records per-page dimensions in `pdf/pages_meta.json`. It measures the aspect ratio of every page and warns, without blocking, when several ratios are mixed. This replaces the `ppt-explain/scripts/doc-to-pages.mjs` that older documentation referenced but that was never actually installed.
+- `precheck.mjs` grew from 6 to **9 checks**: pymupdf, LibreOffice, and a split between the source PDF and the page images, so it can distinguish "stuck at step 1" from "stuck at step 0". New flags: `--pdf`, `--soffice`.
+- New `SKILL.md` sections: the input chain and its rationale, supported inputs, step 0 failure handling, and a version-history table.
+- Six new pitfalls (20–25) covering the PDF chain: why direct PPT extraction always drifts, `soffice.exe` returning before the file exists, LibreOffice profile contention, "exit 0 with no output" on protected documents, the pymupdf/edge_tts same-interpreter requirement, and which intermediate artifacts to keep.
+
+### Changed
+
+- **BREAKING: page images now come from a PDF.** Extracting them directly from the PPT is no longer supported — it is the drift this release removes. A new job runs `precheck` → `to_pdf.py` → `pdf_to_pages.py` → the existing steps 2–7.
+- The pipeline grew from 7 steps to 8 (step 0 was inserted and old step 1 was replaced by the PDF route). Steps 2–7 — narration, voice-over, segment rendering, film subtitles, assembly, verification — keep their logic and parameters **unchanged**, verified by running the downstream scripts unmodified against a real 50-page deck.
+- New dependencies: LibreOffice (PPT/Word input only) and pymupdf, which must share an interpreter with `edge_tts`.
+- Intermediate artifacts: `pdf/source.pdf` is kept by default so pages can be re-extracted and the origin traced (`to_pdf.py --clean` removes it), while the LibreOffice temporary profile is always deleted.
+
+> **This repository versus the marketplace package:** the marketplace 2.0.0 archive does not contain the eleven fixes listed under Unreleased above, because it was built before they were ported back. This repository carries both. Port the patch, then cut 2.0.1 upstream.
+
 ## [1.1.0] - 2026-10-02
 
 Skill: `ppt-to-explainer-video-ffmpeg`
